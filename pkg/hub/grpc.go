@@ -99,6 +99,7 @@ type HeartbeatRequestMsg struct {
 type HeartbeatResponseMsg struct {
 	ContinueCapture bool
 	Message         string
+	BPFFilter       string // If set, agent should update its BPF filter
 }
 
 // registerAgentService registers the gRPC service with proper handler signatures
@@ -182,9 +183,15 @@ func (gs *GRPCServer) heartbeatHandler(srv interface{}, ctx context.Context, dec
 		}
 		gs.agentsMux.Unlock()
 
+		// Get current BPF filter from server
+		gs.server.bpfFilterMutex.RLock()
+		currentFilter := gs.server.bpfFilter
+		gs.server.bpfFilterMutex.RUnlock()
+
 		return &HeartbeatResponseMsg{
 			ContinueCapture: true,
 			Message:         "OK",
+			BPFFilter:       currentFilter,
 		}, nil
 	}
 

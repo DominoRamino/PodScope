@@ -32,6 +32,11 @@ type HubClient struct {
 	// Connection state
 	connected bool
 	connMutex sync.RWMutex
+
+	// Capturer reference for BPF filter updates
+	capturer       *Capturer
+	lastBPFFilter  string
+	bpfFilterMutex sync.RWMutex
 }
 
 // NewHubClient creates a new Hub client
@@ -55,6 +60,11 @@ func NewHubClient(address string, agentInfo *protocol.AgentInfo) *HubClient {
 		flowChan: make(chan *protocol.Flow, 1000),
 		pcapChan: make(chan []byte, 100),
 	}
+}
+
+// SetCapturer sets the capturer reference for BPF filter updates
+func (c *HubClient) SetCapturer(capturer *Capturer) {
+	c.capturer = capturer
 }
 
 // Connect establishes connection to the Hub
@@ -234,13 +244,51 @@ func (c *HubClient) sendHeartbeat() {
 		return
 	}
 
-	// Simple GET request as heartbeat
+	// GET request as heartbeat - check for BPF filter updates
 	resp, err := c.client.Get(c.hubURL + "/api/health")
 	if err != nil {
 		log.Printf("Heartbeat failed: %v", err)
 		return
 	}
-	resp.Body.Close()
+	defer resp.Body.Close()
+
+	// Parse response to check for BPF filter updates
+	var healthResp struct {
+		Status    string `json:"status"`
+		SessionID string `json:"sessionId"`
+		BPFFilter string `json:"bpfFilter"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&healthResp); err != nil {
+		log.Printf("Failed to parse heartbeat response: %v", err)
+		return
+	}
+
+	// Check if BPF filter has changed (including empty string to reset)
+	c.bpfFilterMutex.Lock()
+	lastFilter := c.lastBPFFilter
+	c.bpfFilterMutex.Unlock()
+
+	if healthResp.BPFFilter != lastFilter {
+		if healthResp.BPFFilter == "" {
+			log.Printf("BPF filter cleared by hub - will reset to default on next capture")
+		} else {
+			log.Printf("BPF filter update detected from hub: %s", healthResp.BPFFilter)
+		}
+
+		// Apply the new filter if we have a capturer reference
+		if c.capturer != nil {
+			if err := c.capturer.UpdateBPFFilter(healthResp.BPFFilter); err != nil {
+				log.Printf("Failed to update BPF filter: %v", err)
+			} else {
+				c.bpfFilterMutex.Lock()
+				c.lastBPFFilter = healthResp.BPFFilter
+				c.bpfFilterMutex.Unlock()
+			}
+		} else {
+			log.Printf("WARNING: Cannot update BPF filter - no capturer reference")
+		}
+	}
 }
 
 // SendFlow queues a flow for sending to the Hub

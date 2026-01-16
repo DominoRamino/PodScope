@@ -129,4 +129,5 @@ message AgentStats {
 message HeartbeatResponse {
   bool continue_capture = 1;
   string message = 2;
+  string bpf_filter = 3;  // If set, agent should update its BPF filter
 }

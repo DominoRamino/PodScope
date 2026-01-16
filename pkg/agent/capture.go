@@ -25,11 +25,12 @@ const (
 
 // Capturer handles packet capture and analysis
 type Capturer struct {
-	iface       string
-	bpfFilter   string
-	handle      *pcap.Handle
-	hubClient   *HubClient
-	agentInfo   *protocol.AgentInfo
+	iface            string
+	bpfFilter        string
+	defaultBPFFilter string // Initial filter to reset to when clearing
+	handle           *pcap.Handle
+	hubClient        *HubClient
+	agentInfo        *protocol.AgentInfo
 
 	// Packet buffer for PCAP
 	pcapBuffer  bytes.Buffer
@@ -71,6 +72,44 @@ func NewCapturer(iface string, agentInfo *protocol.AgentInfo, hubClient *HubClie
 // SetBPFFilter sets the BPF filter for capture
 func (c *Capturer) SetBPFFilter(filter string) {
 	c.bpfFilter = filter
+	c.defaultBPFFilter = filter // Store as default for reset
+}
+
+// UpdateBPFFilter updates the BPF filter on a running capture
+func (c *Capturer) UpdateBPFFilter(filter string) error {
+	if c.handle == nil {
+		return fmt.Errorf("capture not running")
+	}
+
+	// If empty string, reset to default filter
+	targetFilter := filter
+	if filter == "" {
+		targetFilter = c.defaultBPFFilter
+		log.Printf("Empty filter received - resetting to default")
+	}
+
+	// Check if filter actually changed
+	if c.bpfFilter == targetFilter {
+		return nil // No change needed
+	}
+
+	log.Printf("====================================")
+	log.Printf("UPDATING BPF FILTER:")
+	log.Printf("  Old: %s", c.bpfFilter)
+	log.Printf("  New: %s", targetFilter)
+	log.Printf("====================================")
+
+	// Apply new filter to running handle
+	if err := c.handle.SetBPFFilter(targetFilter); err != nil {
+		log.Printf("ERROR: Failed to update BPF filter: %v", err)
+		return fmt.Errorf("failed to update BPF filter: %w", err)
+	}
+
+	// Store new filter
+	c.bpfFilter = targetFilter
+	log.Printf("SUCCESS: BPF filter updated on running capture")
+
+	return nil
 }
 
 // Start begins packet capture

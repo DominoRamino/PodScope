@@ -31,7 +31,9 @@
       "Bash(while read ns)",
       "Bash(do)",
       "Bash(minikube ssh:*)",
-      "Bash(chmod +x test-bpf-filter.sh debug.sh ls -lh *.sh)"
+      "Bash(chmod +x test-bpf-filter.sh debug.sh ls -lh *.sh)",
+      "Bash(make:*)",
+      "Bash(kubectl exec:*)"
     ]
   }
 }

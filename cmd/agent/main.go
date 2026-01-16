@@ -87,7 +87,11 @@ func main() {
 	// Create capturer
 	capturer := agent.NewCapturer(iface, agentInfo, hubClient)
 
-	// Set BPF filter to exclude traffic to the Hub (prevent feedback loop) and DNS
+	// Link capturer to hub client for dynamic BPF filter updates
+	hubClient.SetCapturer(capturer)
+
+	// Set BPF filter to exclude traffic to the Hub only (prevent feedback loop)
+	// All other traffic including DNS is captured - filtering happens in UI/PCAP export
 	bpfFilter := buildHubExclusionFilter(hubAddress)
 	if bpfFilter != "" {
 		log.Printf("====================================")
@@ -129,7 +133,7 @@ func main() {
 	log.Printf("  TLS: %d", stats.TLSHandshakes)
 }
 
-// buildHubExclusionFilter creates a BPF filter to exclude traffic to/from the Hub and DNS
+// buildHubExclusionFilter creates a BPF filter to exclude only traffic to/from the Hub
 func buildHubExclusionFilter(hubAddress string) string {
 	// Parse the hub address to get host and port
 	// Hub address format: "podscope-hub.namespace.svc.cluster.local:9090"
@@ -140,25 +144,23 @@ func buildHubExclusionFilter(hubAddress string) string {
 		host = hubAddress[:idx]
 	}
 
-	// Base filter: always exclude DNS traffic (port 53) to reduce noise
-	baseFilter := "not port 53"
-
 	// Resolve the hub hostname to IP
 	ips, err := net.LookupIP(host)
 	if err != nil {
 		log.Printf("Warning: could not resolve hub hostname %s: %v", host, err)
-		// Fallback: exclude traffic to common podscope ports + DNS
-		return fmt.Sprintf("%s and not (port 8080 or port 9090)", baseFilter)
+		// Fallback: exclude traffic to common podscope ports only
+		return "not (port 8080 or port 9090)"
 	}
 
 	if len(ips) == 0 {
 		log.Printf("Warning: no IPs found for hub hostname %s", host)
-		return fmt.Sprintf("%s and not (port 8080 or port 9090)", baseFilter)
+		return "not (port 8080 or port 9090)"
 	}
 
 	hubIP := ips[0].String()
 	log.Printf("  Hub IP: %s", hubIP)
 
-	// Exclude all traffic to/from the hub IP on ports 8080 and 9090, plus DNS
-	return fmt.Sprintf("%s and not (host %s and (port 8080 or port 9090))", baseFilter, hubIP)
+	// Exclude only traffic to/from the hub IP on ports 8080 and 9090
+	// Capture everything else including DNS
+	return fmt.Sprintf("not (host %s and (port 8080 or port 9090))", hubIP)
 }

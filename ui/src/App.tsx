@@ -11,11 +11,24 @@ interface TerminalTarget {
   container?: string
 }
 
+interface FilterOptions {
+  searchText: string
+  showOnlyHTTP: boolean
+  showDNS: boolean
+  showAllPorts: boolean
+}
+
 function App() {
   const [flows, setFlows] = useState<Flow[]>([])
   const [selectedFlow, setSelectedFlow] = useState<Flow | null>(null)
   const [connected, setConnected] = useState(false)
   const [filter, setFilter] = useState('')
+  const [filterOptions, setFilterOptions] = useState<FilterOptions>({
+    searchText: '',
+    showOnlyHTTP: true, // Default: show only HTTP/HTTPS traffic
+    showDNS: false,
+    showAllPorts: false,
+  })
   const [stats, setStats] = useState({ flows: 0, wsClients: 0, pcapSize: 0, paused: false })
   const [terminalTarget, setTerminalTarget] = useState<TerminalTarget | null>(null)
   const [terminalMaximized, setTerminalMaximized] = useState(false)
@@ -103,10 +116,31 @@ function App() {
     return () => clearInterval(interval)
   }, [])
 
+  // Common HTTP/HTTPS ports
+  const HTTP_PORTS = new Set([80, 443, 8080, 8443, 3000, 5000, 8000, 8888, 9090])
+  const DNS_PORT = 53
+
   // Filter flows
   const filteredFlows = flows.filter(flow => {
-    if (!filter) return true
-    const searchLower = filter.toLowerCase()
+    // Protocol/Port filtering
+    if (filterOptions.showAllPorts) {
+      // Show everything (no port filtering)
+    } else if (filterOptions.showOnlyHTTP) {
+      // Show only HTTP/HTTPS ports
+      const isHTTPPort = HTTP_PORTS.has(flow.srcPort) || HTTP_PORTS.has(flow.dstPort)
+      const isHTTPProtocol = flow.protocol === 'HTTP' || flow.protocol === 'HTTPS'
+      if (!isHTTPPort && !isHTTPProtocol) return false
+    }
+
+    // DNS filtering
+    if (!filterOptions.showDNS) {
+      const isDNS = flow.srcPort === DNS_PORT || flow.dstPort === DNS_PORT
+      if (isDNS) return false
+    }
+
+    // Text search filter
+    if (!filter && !filterOptions.searchText) return true
+    const searchLower = (filter || filterOptions.searchText).toLowerCase()
     return (
       flow.srcIp?.toLowerCase().includes(searchLower) ||
       flow.dstIp?.toLowerCase().includes(searchLower) ||
@@ -158,7 +192,20 @@ function App() {
 
   const handleDownloadPCAP = useCallback(async (streamId?: string) => {
     try {
-      const url = streamId ? `/api/pcap/${streamId}` : '/api/pcap'
+      // Build URL with filter parameters
+      let url = streamId ? `/api/pcap/${streamId}` : '/api/pcap'
+      const params = new URLSearchParams()
+
+      // Add filter parameters
+      if (filterOptions.showOnlyHTTP) params.set('onlyHTTP', 'true')
+      if (filterOptions.showDNS) params.set('includeDNS', 'true')
+      if (filterOptions.showAllPorts) params.set('allPorts', 'true')
+      if (filter) params.set('search', filter)
+
+      if (params.toString()) {
+        url += '?' + params.toString()
+      }
+
       const res = await fetch(url)
       if (!res.ok) throw new Error('Download failed')
 
@@ -166,7 +213,8 @@ function App() {
       const downloadUrl = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = downloadUrl
-      a.download = streamId ? `stream-${streamId}.pcap` : 'podscope-session.pcap'
+      const filterSuffix = filterOptions.showOnlyHTTP ? '-http' : filterOptions.showAllPorts ? '-all' : ''
+      a.download = streamId ? `stream-${streamId}${filterSuffix}.pcap` : `podscope-session${filterSuffix}.pcap`
       document.body.appendChild(a)
       a.click()
       document.body.removeChild(a)
@@ -174,7 +222,7 @@ function App() {
     } catch (err) {
       console.error('Failed to download PCAP:', err)
     }
-  }, [])
+  }, [filterOptions, filter])
 
   return (
     <div className="h-screen flex flex-col bg-slate-900 text-white">
@@ -184,6 +232,8 @@ function App() {
         pcapSize={stats.pcapSize}
         filter={filter}
         onFilterChange={setFilter}
+        filterOptions={filterOptions}
+        onFilterOptionsChange={setFilterOptions}
         onDownloadPCAP={() => handleDownloadPCAP()}
         isPaused={stats.paused}
         onTogglePause={handleTogglePause}

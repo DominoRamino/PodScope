@@ -127,19 +127,29 @@ export function Terminal({
       }
     })
 
-    // Handle resize
+    // Handle resize with debouncing to prevent infinite loops
+    let resizeTimeout: number | null = null
     const resizeObserver = new ResizeObserver(() => {
-      if (fitAddonRef.current) {
-        fitAddonRef.current.fit()
-        if (xtermRef.current) {
+      if (resizeTimeout) {
+        clearTimeout(resizeTimeout)
+      }
+      resizeTimeout = window.setTimeout(() => {
+        if (fitAddonRef.current && xtermRef.current) {
+          fitAddonRef.current.fit()
           sendResize(xtermRef.current.cols, xtermRef.current.rows)
         }
-      }
+      }, 100) // Debounce 100ms
     })
-    resizeObserver.observe(terminalRef.current)
+
+    if (terminalRef.current) {
+      resizeObserver.observe(terminalRef.current)
+    }
 
     // Cleanup
     return () => {
+      if (resizeTimeout) {
+        clearTimeout(resizeTimeout)
+      }
       resizeObserver.disconnect()
       ws.close()
       term.dispose()
@@ -181,7 +191,7 @@ export function Terminal({
       </div>
 
       {/* Terminal */}
-      <div ref={terminalRef} className="flex-1 p-2" />
+      <div ref={terminalRef} className="flex-1 p-2 overflow-hidden" />
     </div>
   )
 }

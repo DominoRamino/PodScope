@@ -12,6 +12,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/gopacket/layers"
+	"github.com/google/gopacket/pcap"
 	"github.com/gorilla/websocket"
 	"github.com/podscope/podscope/pkg/protocol"
 	corev1 "k8s.io/api/core/v1"
@@ -44,6 +46,10 @@ type Server struct {
 	// Pause state - when true, PCAP data is not stored
 	paused      bool
 	pausedMutex sync.RWMutex
+
+	// BPF filter - can be updated dynamically
+	bpfFilter      string
+	bpfFilterMutex sync.RWMutex
 
 	// Kubernetes client for terminal exec (initialized lazily)
 	k8sClient     kubernetes.Interface
@@ -94,10 +100,12 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("/api/flows/ws", s.handleFlowsWebSocket)
 	mux.HandleFunc("/api/pcap", s.handleDownloadPCAP)
 	mux.HandleFunc("/api/pcap/upload", s.handlePCAPUpload)
+	mux.HandleFunc("/api/pcap/reset", s.handlePCAPReset)
 	mux.HandleFunc("/api/pcap/", s.handleDownloadStreamPCAP)
 	mux.HandleFunc("/api/stats", s.handleStats)
 	mux.HandleFunc("/api/agents", s.handleAgents)
 	mux.HandleFunc("/api/pause", s.handlePause)
+	mux.HandleFunc("/api/bpf-filter", s.handleBPFFilter)
 	mux.HandleFunc("/api/terminal/ws", s.handleTerminalWebSocket)
 
 	// Serve static UI files
@@ -130,10 +138,17 @@ func (s *Server) Start(ctx context.Context) error {
 // handleHealth returns server health status
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+
+	// Get current BPF filter
+	s.bpfFilterMutex.RLock()
+	currentFilter := s.bpfFilter
+	s.bpfFilterMutex.RUnlock()
+
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"status":    "healthy",
 		"sessionId": s.sessionID,
 		"timestamp": time.Now().UTC(),
+		"bpfFilter": currentFilter,
 	})
 }
 
@@ -193,6 +208,34 @@ func (s *Server) handlePCAPUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusOK)
+}
+
+// handlePCAPReset handles PCAP reset requests
+func (s *Server) handlePCAPReset(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+
+	// Reset the PCAP buffer
+	if err := s.pcapBuffer.Reset(); err != nil {
+		log.Printf("Failed to reset PCAP buffer: %v", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": fmt.Sprintf("Failed to reset PCAP: %v", err),
+		})
+		return
+	}
+
+	log.Printf("PCAP buffer reset successfully")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"message": "PCAP buffer reset successfully",
+	})
 }
 
 // handleAgents handles agent registration
@@ -262,6 +305,106 @@ func (s *Server) handlePause(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleBPFFilter handles BPF filter GET/UPDATE requests
+// validateBPFFilter validates a BPF filter expression using libpcap
+func validateBPFFilter(filter string) error {
+	if filter == "" {
+		return nil // Empty filter is valid (resets to default)
+	}
+
+	// Try to compile the filter using libpcap
+	// We use a dummy inactive handle just for validation
+	inactive, err := pcap.NewInactiveHandle("lo")
+	if err != nil {
+		// If we can't create inactive handle, try to just compile the BPF
+		// This is a basic syntax check
+		_, err := pcap.CompileBPFFilter(layers.LinkTypeEthernet, 65535, filter)
+		if err != nil {
+			return fmt.Errorf("invalid BPF syntax: %w", err)
+		}
+		return nil
+	}
+	defer inactive.CleanUp()
+
+	// Activate the handle
+	handle, err := inactive.Activate()
+	if err != nil {
+		// If activation fails, fall back to compile check
+		_, err := pcap.CompileBPFFilter(layers.LinkTypeEthernet, 65535, filter)
+		if err != nil {
+			return fmt.Errorf("invalid BPF syntax: %w", err)
+		}
+		return nil
+	}
+	defer handle.Close()
+
+	// Try to set the filter on the handle
+	if err := handle.SetBPFFilter(filter); err != nil {
+		return fmt.Errorf("invalid BPF syntax: %w", err)
+	}
+
+	return nil
+}
+
+func (s *Server) handleBPFFilter(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	switch r.Method {
+	case http.MethodGet:
+		// Return current BPF filter
+		s.bpfFilterMutex.RLock()
+		filter := s.bpfFilter
+		s.bpfFilterMutex.RUnlock()
+
+		json.NewEncoder(w).Encode(map[string]string{"filter": filter})
+
+	case http.MethodPost:
+		// Update BPF filter
+		var req struct {
+			Filter *string `json:"filter"`
+		}
+
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, fmt.Sprintf("Invalid request: %v", err), http.StatusBadRequest)
+			return
+		}
+
+		if req.Filter == nil {
+			http.Error(w, "Missing 'filter' field", http.StatusBadRequest)
+			return
+		}
+
+		// Validate the filter before applying
+		if err := validateBPFFilter(*req.Filter); err != nil {
+			log.Printf("BPF filter validation failed: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"error":   err.Error(),
+				"message": "Invalid BPF filter syntax",
+			})
+			return
+		}
+
+		// Update the filter
+		s.bpfFilterMutex.Lock()
+		s.bpfFilter = *req.Filter
+		s.bpfFilterMutex.Unlock()
+
+		log.Printf("BPF filter updated to: %s", *req.Filter)
+		log.Printf("Filter will be applied to agents on next heartbeat")
+
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"filter":  *req.Filter,
+			"message": "BPF filter will be applied on next heartbeat",
+		})
+
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
 // handleFlowsWebSocket handles WebSocket connections for live flow updates
 func (s *Server) handleFlowsWebSocket(w http.ResponseWriter, r *http.Request) {
 	conn, err := s.wsUpgrader.Upgrade(w, r, nil)
@@ -303,6 +446,21 @@ func (s *Server) handleFlowsWebSocket(w http.ResponseWriter, r *http.Request) {
 
 // handleDownloadPCAP handles PCAP file downloads for the entire session
 func (s *Server) handleDownloadPCAP(w http.ResponseWriter, r *http.Request) {
+	// Parse filter parameters from query string
+	query := r.URL.Query()
+	onlyHTTP := query.Get("onlyHTTP") == "true"
+	includeDNS := query.Get("includeDNS") == "true"
+	allPorts := query.Get("allPorts") == "true"
+	searchText := query.Get("search")
+
+	// Log filter parameters
+	if onlyHTTP || !includeDNS || allPorts || searchText != "" {
+		log.Printf("PCAP download with filters: onlyHTTP=%v includeDNS=%v allPorts=%v search=%q",
+			onlyHTTP, includeDNS, allPorts, searchText)
+	}
+
+	// TODO: Implement packet filtering based on these parameters
+	// For now, return all packets (filtering happens in UI view)
 	pcapData, err := s.pcapBuffer.GetSessionPCAP()
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to generate PCAP: %v", err), http.StatusInternalServerError)
@@ -323,6 +481,21 @@ func (s *Server) handleDownloadStreamPCAP(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// Parse filter parameters from query string
+	query := r.URL.Query()
+	onlyHTTP := query.Get("onlyHTTP") == "true"
+	includeDNS := query.Get("includeDNS") == "true"
+	allPorts := query.Get("allPorts") == "true"
+	searchText := query.Get("search")
+
+	// Log filter parameters
+	if onlyHTTP || !includeDNS || allPorts || searchText != "" {
+		log.Printf("Stream PCAP download with filters: stream=%s onlyHTTP=%v includeDNS=%v allPorts=%v search=%q",
+			streamID, onlyHTTP, includeDNS, allPorts, searchText)
+	}
+
+	// TODO: Implement packet filtering based on these parameters
+	// For now, return all packets (filtering happens in UI view)
 	pcapData, err := s.pcapBuffer.GetStreamPCAP(streamID)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to generate PCAP: %v", err), http.StatusInternalServerError)
@@ -439,8 +612,11 @@ func (s *Server) getAgentContainer(ctx context.Context, namespace, podName strin
 
 // handleTerminalWebSocket handles WebSocket connections for terminal exec
 func (s *Server) handleTerminalWebSocket(w http.ResponseWriter, r *http.Request) {
+	log.Printf("Terminal WebSocket request received: %s", r.URL.String())
+
 	// Initialize k8s client if needed
 	if err := s.initK8sClient(); err != nil {
+		log.Printf("ERROR: Terminal k8s client init failed: %v", err)
 		http.Error(w, fmt.Sprintf("Terminal not available: %v", err), http.StatusServiceUnavailable)
 		return
 	}
@@ -450,6 +626,8 @@ func (s *Server) handleTerminalWebSocket(w http.ResponseWriter, r *http.Request)
 	podName := r.URL.Query().Get("pod")
 	container := r.URL.Query().Get("container")
 
+	log.Printf("Terminal request: namespace=%s pod=%s container=%s", namespace, podName, container)
+
 	if namespace == "" || podName == "" {
 		http.Error(w, "namespace and pod parameters required", http.StatusBadRequest)
 		return
@@ -457,14 +635,18 @@ func (s *Server) handleTerminalWebSocket(w http.ResponseWriter, r *http.Request)
 
 	// If no container specified, find the agent container
 	if container == "" {
+		log.Printf("Looking for agent container in pod %s/%s...", namespace, podName)
 		var err error
 		container, err = s.getAgentContainer(r.Context(), namespace, podName)
 		if err != nil {
+			log.Printf("ERROR: Failed to find agent container: %v", err)
 			http.Error(w, fmt.Sprintf("failed to find agent container: %v", err), http.StatusNotFound)
 			return
 		}
+		log.Printf("Found agent container: %s", container)
 	}
 
+	log.Printf("Upgrading to WebSocket for terminal session...")
 	// Upgrade to WebSocket
 	conn, err := s.wsUpgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -476,6 +658,7 @@ func (s *Server) handleTerminalWebSocket(w http.ResponseWriter, r *http.Request)
 	log.Printf("Terminal session started: %s/%s container=%s", namespace, podName, container)
 
 	// Create the exec request
+	log.Printf("Creating exec request for /bin/sh...")
 	req := s.k8sClient.CoreV1().RESTClient().Post().
 		Resource("pods").
 		Name(podName).
@@ -490,6 +673,7 @@ func (s *Server) handleTerminalWebSocket(w http.ResponseWriter, r *http.Request)
 			TTY:       true,
 		}, scheme.ParameterCodec)
 
+	log.Printf("Creating SPDY executor for URL: %s", req.URL())
 	exec, err := remotecommand.NewSPDYExecutor(s.k8sRestConfig, http.MethodPost, req.URL())
 	if err != nil {
 		log.Printf("Failed to create SPDY executor: %v", err)
@@ -498,6 +682,7 @@ func (s *Server) handleTerminalWebSocket(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Create terminal bridge
+	log.Printf("Creating WebSocket terminal bridge...")
 	terminal := NewWebSocketTerminal(conn)
 	defer terminal.Close()
 
@@ -505,6 +690,7 @@ func (s *Server) handleTerminalWebSocket(w http.ResponseWriter, r *http.Request)
 	terminal.sizeCh <- remotecommand.TerminalSize{Width: 80, Height: 24}
 
 	// Execute and stream
+	log.Printf("Starting exec stream...")
 	ctx := r.Context()
 	err = exec.StreamWithContext(ctx, remotecommand.StreamOptions{
 		Stdin:             terminal,

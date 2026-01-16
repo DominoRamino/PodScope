@@ -7,12 +7,14 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -23,12 +25,15 @@ import (
 	"k8s.io/kubectl/pkg/scheme"
 )
 
+// DefaultImageTag can be overridden at build time via -ldflags
+var DefaultImageTag = "v1"
+
 // GetAgentImage returns the agent image to use, checking env var first
 func GetAgentImage() string {
 	if img := os.Getenv("PODSCOPE_AGENT_IMAGE"); img != "" {
 		return img
 	}
-	return "podscope-agent:latest"
+	return fmt.Sprintf("podscope-agent:%s", DefaultImageTag)
 }
 
 // GetHubImage returns the hub image to use, checking env var first
@@ -36,7 +41,7 @@ func GetHubImage() string {
 	if img := os.Getenv("PODSCOPE_HUB_IMAGE"); img != "" {
 		return img
 	}
-	return "podscope:latest"
+	return fmt.Sprintf("podscope:%s", DefaultImageTag)
 }
 
 // Session manages a PodScope capture session
@@ -117,7 +122,69 @@ func (s *Session) deployHub(ctx context.Context) error {
 		"podscope.io/session-id":      s.id,
 	}
 
+	serviceAccountName := "podscope-hub"
 	replicas := int32(1)
+
+	// Create ServiceAccount for hub
+	sa := &corev1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      serviceAccountName,
+			Namespace: s.namespace,
+			Labels:    labels,
+		},
+	}
+	_, err := s.client.clientset.CoreV1().ServiceAccounts(s.namespace).Create(ctx, sa, metav1.CreateOptions{})
+	if err != nil && !errors.IsAlreadyExists(err) {
+		return fmt.Errorf("failed to create service account: %w", err)
+	}
+
+	// Create ClusterRole with permissions for terminal exec
+	clusterRole := &rbacv1.ClusterRole{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: fmt.Sprintf("podscope-hub-%s", s.id),
+			Labels: labels,
+		},
+		Rules: []rbacv1.PolicyRule{
+			{
+				APIGroups: []string{""},
+				Resources: []string{"pods"},
+				Verbs:     []string{"get", "list"},
+			},
+			{
+				APIGroups: []string{""},
+				Resources: []string{"pods/exec"},
+				Verbs:     []string{"create"},
+			},
+		},
+	}
+	_, err = s.client.clientset.RbacV1().ClusterRoles().Create(ctx, clusterRole, metav1.CreateOptions{})
+	if err != nil && !errors.IsAlreadyExists(err) {
+		return fmt.Errorf("failed to create cluster role: %w", err)
+	}
+
+	// Create ClusterRoleBinding
+	clusterRoleBinding := &rbacv1.ClusterRoleBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: fmt.Sprintf("podscope-hub-%s", s.id),
+			Labels: labels,
+		},
+		RoleRef: rbacv1.RoleRef{
+			APIGroup: "rbac.authorization.k8s.io",
+			Kind:     "ClusterRole",
+			Name:     fmt.Sprintf("podscope-hub-%s", s.id),
+		},
+		Subjects: []rbacv1.Subject{
+			{
+				Kind:      "ServiceAccount",
+				Name:      serviceAccountName,
+				Namespace: s.namespace,
+			},
+		},
+	}
+	_, err = s.client.clientset.RbacV1().ClusterRoleBindings().Create(ctx, clusterRoleBinding, metav1.CreateOptions{})
+	if err != nil && !errors.IsAlreadyExists(err) {
+		return fmt.Errorf("failed to create cluster role binding: %w", err)
+	}
 
 	// Create Deployment
 	deployment := &appsv1.Deployment{
@@ -136,6 +203,7 @@ func (s *Session) deployHub(ctx context.Context) error {
 					Labels: labels,
 				},
 				Spec: corev1.PodSpec{
+					ServiceAccountName: serviceAccountName,
 					Containers: []corev1.Container{
 						{
 							Name:            "hub",
@@ -192,7 +260,7 @@ func (s *Session) deployHub(ctx context.Context) error {
 		},
 	}
 
-	_, err := s.client.clientset.AppsV1().Deployments(s.namespace).Create(ctx, deployment, metav1.CreateOptions{})
+	_, err = s.client.clientset.AppsV1().Deployments(s.namespace).Create(ctx, deployment, metav1.CreateOptions{})
 	if err != nil && !errors.IsAlreadyExists(err) {
 		return fmt.Errorf("failed to create deployment: %w", err)
 	}

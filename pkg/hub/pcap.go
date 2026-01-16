@@ -63,16 +63,38 @@ func (p *PCAPBuffer) Write(agentID string, data []byte) error {
 			return fmt.Errorf("failed to create pcap file: %w", err)
 		}
 
+		// Write PCAP global header for new files
+		var headerBuf bytes.Buffer
+		if err := writePCAPHeader(&headerBuf); err != nil {
+			file.Close()
+			return fmt.Errorf("failed to write pcap header: %w", err)
+		}
+		if _, err := file.Write(headerBuf.Bytes()); err != nil {
+			file.Close()
+			return fmt.Errorf("failed to write pcap header to file: %w", err)
+		}
+
 		ab = &agentBuffer{
 			agentID:  agentID,
 			filePath: filePath,
 			file:     file,
+			size:     int64(headerBuf.Len()), // Account for header size
 		}
 		p.agents[agentID] = ab
 	}
 
+	// Strip PCAP header from data if present (agent's first chunk includes header)
+	// PCAP magic number is 0xd4c3b2a1 (little-endian) or 0xa1b2c3d4 (big-endian)
+	dataToWrite := data
+	if len(data) >= 24 &&
+		((data[0] == 0xd4 && data[1] == 0xc3 && data[2] == 0xb2 && data[3] == 0xa1) ||
+			(data[0] == 0xa1 && data[1] == 0xb2 && data[2] == 0xc3 && data[3] == 0xd4)) {
+		// This chunk has a PCAP header, skip it
+		dataToWrite = data[24:]
+	}
+
 	// Write data
-	n, err := ab.file.Write(data)
+	n, err := ab.file.Write(dataToWrite)
 	if err != nil {
 		return fmt.Errorf("failed to write pcap data: %w", err)
 	}
@@ -114,7 +136,8 @@ func (p *PCAPBuffer) GetSessionPCAP() ([]byte, error) {
 			continue
 		}
 
-		// Skip the global header from each agent file and append packets
+		// Each agent file has a 24-byte PCAP global header at the start
+		// Skip it and append only the packet records
 		if len(data) > 24 {
 			buf.Write(data[24:])
 		}
@@ -128,6 +151,32 @@ func (p *PCAPBuffer) GetStreamPCAP(streamID string) ([]byte, error) {
 	// For MVP, we return all data - stream filtering would require packet parsing
 	// TODO: Implement stream-specific filtering
 	return p.GetSessionPCAP()
+}
+
+// Reset clears all PCAP data and deletes files
+func (p *PCAPBuffer) Reset() error {
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+
+	// Close and delete all agent files
+	for _, ab := range p.agents {
+		if ab.file != nil {
+			ab.file.Close()
+		}
+		// Delete the file
+		if err := os.Remove(ab.filePath); err != nil {
+			// Log but don't fail if file doesn't exist
+			if !os.IsNotExist(err) {
+				return fmt.Errorf("failed to delete pcap file: %w", err)
+			}
+		}
+	}
+
+	// Clear agents map and reset total size
+	p.agents = make(map[string]*agentBuffer)
+	p.totalSize = 0
+
+	return nil
 }
 
 // Close closes all open files
