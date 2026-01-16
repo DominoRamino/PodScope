@@ -1,0 +1,51 @@
+# PodScope Hub Dockerfile
+FROM golang:1.22-alpine AS builder
+
+WORKDIR /app
+
+# Install build dependencies
+RUN apk add --no-cache git
+
+# Copy go mod files
+COPY go.mod go.sum* ./
+RUN go mod download
+
+# Copy source
+COPY . .
+
+# Build
+RUN CGO_ENABLED=0 GOOS=linux go build -o hub ./cmd/hub
+
+# UI Builder
+FROM node:20-alpine AS ui-builder
+
+WORKDIR /app/ui
+COPY ui/package*.json ./
+RUN npm ci
+
+COPY ui/ ./
+RUN npm run build
+
+# Final image
+FROM alpine:3.19
+
+RUN apk add --no-cache ca-certificates tzdata
+
+WORKDIR /app
+
+# Copy binary
+COPY --from=builder /app/hub /app/hub
+
+# Copy UI
+COPY --from=ui-builder /app/ui/dist /app/ui
+
+# Create data directory
+RUN mkdir -p /data/pcap
+
+ENV HTTP_PORT=8080
+ENV GRPC_PORT=9090
+ENV PCAP_DIR=/data/pcap
+
+EXPOSE 8080 9090
+
+ENTRYPOINT ["/app/hub"]

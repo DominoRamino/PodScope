@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(go build:*)",
+      "Bash(sudo apt-get install:*)",
+      "Bash(npm install)",
+      "Bash(npm run build:*)",
+      "Bash(minikube start:*)",
+      "Bash(./bin/podscope tap:*)",
+      "Bash(kubectl delete:*)",
+      "Bash(pkill:*)",
+      "Bash(docker build:*)",
+      "Bash(kubectl get:*)",
+      "Bash(kubectl describe:*)",
+      "Bash(kubectl logs:*)",
+      "Bash(kubectl run:*)"
+    ]
+  }
+}

@@ -1,0 +1,49 @@
+# PodScope Agent Dockerfile
+# Uses multi-stage build for minimal image with libpcap
+
+FROM golang:1.22-alpine AS builder
+
+WORKDIR /app
+
+# Install build dependencies (libpcap-dev for gopacket)
+RUN apk add --no-cache git gcc musl-dev libpcap-dev
+
+# Copy go mod files
+COPY go.mod go.sum* ./
+RUN go mod download
+
+# Copy source
+COPY . .
+
+# Build with static linking
+RUN CGO_ENABLED=1 GOOS=linux go build \
+    -ldflags '-extldflags "-static"' \
+    -tags netgo \
+    -o agent ./cmd/agent
+
+# Final minimal image
+FROM alpine:3.19
+
+# Install libpcap runtime and network diagnostic tools
+RUN apk add --no-cache \
+    libpcap \
+    ca-certificates \
+    tcpdump \
+    curl \
+    bind-tools \
+    netcat-openbsd \
+    traceroute \
+    wget
+
+WORKDIR /app
+
+# Copy binary
+COPY --from=builder /app/agent /app/agent
+
+# Agent runs as non-root but needs NET_RAW capability
+# This is handled by the security context in k8s
+
+ENV INTERFACE=eth0
+ENV HUB_ADDRESS=podscope-hub:9090
+
+ENTRYPOINT ["/app/agent"]
