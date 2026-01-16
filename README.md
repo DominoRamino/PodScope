@@ -2,6 +2,7 @@
 
 A lightweight, ephemeral network traffic capture and analysis tool for Kubernetes. PodScope attaches to pods using ephemeral containers to capture and analyze network traffic without modifying your deployments.
 
+<video src="./demo-0.1.0.mp4" width="320" height="240" controls></video>
 ## Features
 
 - **Zero-intrusion packet capture** via Kubernetes ephemeral containers
