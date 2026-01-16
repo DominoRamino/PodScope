@@ -1,0 +1,46 @@
+# Binaries
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary
+*.test
+
+# Output of go coverage
+*.out
+
+# Go workspace
+go.work
+
+# Dependency directories
+vendor/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Node
+ui/node_modules/
+ui/dist/
+ui/.vite/
+
+# Build artifacts
+*.log
+
+# Local env files
+.env
+.env.local
+.env.*.local
+
+# PCAP files
+*.pcap

@@ -1,0 +1,71 @@
+# PodScope Hub Dockerfile
+FROM golang:1.24-alpine AS builder
+
+# Build arguments for versioning
+ARG VERSION=dev
+ARG BUILD_DATE=unknown
+ARG GIT_COMMIT=unknown
+
+WORKDIR /app
+
+# Install build dependencies
+RUN apk add --no-cache git gcc musl-dev libpcap-dev
+
+# Copy go mod files
+COPY go.mod go.sum* ./
+RUN go mod download
+
+# Copy source
+COPY . .
+
+# Build with version info (CGO enabled for pcap validation)
+RUN CGO_ENABLED=1 GOOS=linux go build \
+    -ldflags "-extldflags '-static' -X main.Version=${VERSION} -X main.BuildDate=${BUILD_DATE} -X main.GitCommit=${GIT_COMMIT}" \
+    -tags netgo \
+    -o hub ./cmd/hub
+
+# UI Builder
+FROM node:20-alpine AS ui-builder
+
+WORKDIR /app/ui
+COPY ui/package*.json ./
+RUN npm ci
+
+COPY ui/ ./
+RUN npm run build
+
+# Final image
+FROM alpine:3.19
+
+# Build arguments for labels
+ARG VERSION=dev
+ARG BUILD_DATE=unknown
+ARG GIT_COMMIT=unknown
+
+# Add labels for image metadata
+LABEL org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.created="${BUILD_DATE}" \
+      org.opencontainers.image.revision="${GIT_COMMIT}" \
+      org.opencontainers.image.title="PodScope Hub" \
+      org.opencontainers.image.description="Central hub for aggregating and serving network traffic data"
+
+RUN apk add --no-cache ca-certificates tzdata libpcap
+
+WORKDIR /app
+
+# Copy binary
+COPY --from=builder /app/hub /app/hub
+
+# Copy UI
+COPY --from=ui-builder /app/ui/dist /app/ui
+
+# Create data directory
+RUN mkdir -p /data/pcap
+
+ENV HTTP_PORT=8080
+ENV GRPC_PORT=9090
+ENV PCAP_DIR=/data/pcap
+
+EXPOSE 8080 9090
+
+ENTRYPOINT ["/app/hub"]

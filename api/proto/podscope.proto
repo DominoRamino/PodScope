@@ -1,0 +1,133 @@
+syntax = "proto3";
+
+package podscope;
+
+option go_package = "github.com/podscope/podscope/pkg/protocol/pb";
+
+// AgentService is the gRPC service for agent-to-hub communication
+service AgentService {
+  // StreamFlows sends captured flow events from agent to hub
+  rpc StreamFlows(stream FlowEvent) returns (StreamResponse);
+
+  // StreamPCAP sends raw PCAP chunks from agent to hub
+  rpc StreamPCAP(stream PCAPChunk) returns (StreamResponse);
+
+  // RegisterAgent registers an agent with the hub
+  rpc RegisterAgent(AgentInfo) returns (RegisterResponse);
+
+  // Heartbeat keeps the agent connection alive
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+}
+
+message AgentInfo {
+  string id = 1;
+  string pod_name = 2;
+  string namespace = 3;
+  string pod_ip = 4;
+  string node_name = 5;
+  string session_id = 6;
+}
+
+message RegisterResponse {
+  bool success = 1;
+  string message = 2;
+  AgentConfig config = 3;
+}
+
+message AgentConfig {
+  string hub_address = 1;
+  int32 buffer_size = 2;
+  int32 flush_interval_ms = 3;
+  repeated string capture_interfaces = 4;
+  string bpf_filter = 5;
+}
+
+message FlowEvent {
+  string agent_id = 1;
+  Flow flow = 2;
+}
+
+message Flow {
+  string id = 1;
+  int64 timestamp = 2;
+  int64 duration_ms = 3;
+
+  string src_ip = 4;
+  uint32 src_port = 5;
+  string src_pod = 6;
+  string src_namespace = 7;
+
+  string dst_ip = 8;
+  uint32 dst_port = 9;
+  string dst_pod = 10;
+  string dst_namespace = 11;
+  string dst_service = 12;
+
+  string protocol = 13;
+  string status = 14;
+
+  uint64 bytes_sent = 15;
+  uint64 bytes_received = 16;
+  uint32 packets_sent = 17;
+  uint32 packets_received = 18;
+
+  double tcp_handshake_ms = 19;
+  double tls_handshake_ms = 20;
+  double ttfb_ms = 21;
+
+  HTTPInfo http = 22;
+  TLSInfo tls = 23;
+}
+
+message HTTPInfo {
+  string method = 1;
+  string url = 2;
+  string host = 3;
+  int32 status_code = 4;
+  string status_text = 5;
+  map<string, string> request_headers = 6;
+  map<string, string> response_headers = 7;
+  string request_body = 8;
+  string response_body = 9;
+  string content_type = 10;
+  int64 content_length = 11;
+}
+
+message TLSInfo {
+  string version = 1;
+  string sni = 2;
+  string cipher_suite = 3;
+  repeated string alpn = 4;
+  bool encrypted = 5;
+}
+
+message PCAPChunk {
+  string agent_id = 1;
+  int64 timestamp = 2;
+  bytes data = 3;
+}
+
+message StreamResponse {
+  bool success = 1;
+  string message = 2;
+  int64 received_count = 3;
+}
+
+message HeartbeatRequest {
+  string agent_id = 1;
+  int64 timestamp = 2;
+  AgentStats stats = 3;
+}
+
+message AgentStats {
+  uint64 packets_captured = 1;
+  uint64 bytes_captured = 2;
+  uint64 flows_detected = 3;
+  uint64 errors = 4;
+}
+
+message HeartbeatResponse {
+  bool continue_capture = 1;
+  string message = 2;
+  string bpf_filter = 3;  // If set, agent should update its BPF filter
+}

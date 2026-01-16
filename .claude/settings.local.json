@@ -1,0 +1,39 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(go build:*)",
+      "Bash(sudo apt-get install:*)",
+      "Bash(npm install)",
+      "Bash(npm run build:*)",
+      "Bash(minikube start:*)",
+      "Bash(./bin/podscope tap:*)",
+      "Bash(kubectl delete:*)",
+      "Bash(pkill:*)",
+      "Bash(docker build:*)",
+      "Bash(kubectl get:*)",
+      "Bash(kubectl describe:*)",
+      "Bash(kubectl logs:*)",
+      "Bash(kubectl run:*)",
+      "Bash(minikube image load:*)",
+      "Bash(make build-hub:*)",
+      "Bash(make load:*)",
+      "Bash(while read pod)",
+      "Bash(do echo \"  - $pod \\(has agent\\)\")",
+      "Bash(done)",
+      "Bash(echo \"   kubectl logs <new-pod-name> -n default -c podscope-agent-XXXX --tail=100 | grep -E ''BPF|DEBUG|WARNING''\")",
+      "Bash(echo:*)",
+      "Bash(make build-cli:*)",
+      "Bash(./podscope:*)",
+      "Bash(make version:*)",
+      "Bash(make build:*)",
+      "Bash(docker inspect:*)",
+      "Bash(minikube image:*)",
+      "Bash(while read ns)",
+      "Bash(do)",
+      "Bash(minikube ssh:*)",
+      "Bash(chmod +x test-bpf-filter.sh debug.sh ls -lh *.sh)",
+      "Bash(make:*)",
+      "Bash(kubectl exec:*)"
+    ]
+  }
+}
