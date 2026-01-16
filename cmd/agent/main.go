@@ -16,6 +16,13 @@ import (
 	"github.com/podscope/podscope/pkg/protocol"
 )
 
+var (
+	// Version information - set at build time via ldflags
+	Version   = "dev"
+	BuildDate = "unknown"
+	GitCommit = "unknown"
+)
+
 func main() {
 	// Parse configuration from environment
 	hubAddress := os.Getenv("HUB_ADDRESS")
@@ -35,10 +42,16 @@ func main() {
 	// Generate agent ID
 	agentID := uuid.New().String()[:8]
 
+	log.Printf("====================================")
 	log.Printf("PodScope Agent starting...")
+	log.Printf("  Version: %s", Version)
+	log.Printf("  Built: %s", BuildDate)
+	log.Printf("  Commit: %s", GitCommit)
+	log.Printf("====================================")
 	log.Printf("  Agent ID: %s", agentID)
 	log.Printf("  Session: %s", sessionID)
-	log.Printf("  Pod: %s/%s (%s)", podNamespace, podName, podIP)
+	log.Printf("  Pod: %s/%s", podNamespace, podName)
+	log.Printf("  Pod IP: %q", podIP) // Use %q to show if empty
 	log.Printf("  Interface: %s", iface)
 	log.Printf("  Hub: %s", hubAddress)
 
@@ -74,11 +87,16 @@ func main() {
 	// Create capturer
 	capturer := agent.NewCapturer(iface, agentInfo, hubClient)
 
-	// Set BPF filter to exclude traffic to the Hub (prevent feedback loop)
+	// Set BPF filter to exclude traffic to the Hub (prevent feedback loop) and DNS
 	bpfFilter := buildHubExclusionFilter(hubAddress)
 	if bpfFilter != "" {
-		log.Printf("  BPF Filter: %s", bpfFilter)
+		log.Printf("====================================")
+		log.Printf("APPLYING BPF FILTER:")
+		log.Printf("  %s", bpfFilter)
+		log.Printf("====================================")
 		capturer.SetBPFFilter(bpfFilter)
+	} else {
+		log.Printf("WARNING: No BPF filter set! All traffic will be captured!")
 	}
 
 	// Setup context with cancellation
@@ -111,7 +129,7 @@ func main() {
 	log.Printf("  TLS: %d", stats.TLSHandshakes)
 }
 
-// buildHubExclusionFilter creates a BPF filter to exclude traffic to/from the Hub
+// buildHubExclusionFilter creates a BPF filter to exclude traffic to/from the Hub and DNS
 func buildHubExclusionFilter(hubAddress string) string {
 	// Parse the hub address to get host and port
 	// Hub address format: "podscope-hub.namespace.svc.cluster.local:9090"
@@ -122,22 +140,25 @@ func buildHubExclusionFilter(hubAddress string) string {
 		host = hubAddress[:idx]
 	}
 
+	// Base filter: always exclude DNS traffic (port 53) to reduce noise
+	baseFilter := "not port 53"
+
 	// Resolve the hub hostname to IP
 	ips, err := net.LookupIP(host)
 	if err != nil {
 		log.Printf("Warning: could not resolve hub hostname %s: %v", host, err)
-		// Fallback: exclude traffic to common podscope ports
-		return "not (port 8080 or port 9090)"
+		// Fallback: exclude traffic to common podscope ports + DNS
+		return fmt.Sprintf("%s and not (port 8080 or port 9090)", baseFilter)
 	}
 
 	if len(ips) == 0 {
 		log.Printf("Warning: no IPs found for hub hostname %s", host)
-		return "not (port 8080 or port 9090)"
+		return fmt.Sprintf("%s and not (port 8080 or port 9090)", baseFilter)
 	}
 
 	hubIP := ips[0].String()
 	log.Printf("  Hub IP: %s", hubIP)
 
-	// Exclude all traffic to/from the hub IP on ports 8080 and 9090
-	return fmt.Sprintf("not (host %s and (port 8080 or port 9090))", hubIP)
+	// Exclude all traffic to/from the hub IP on ports 8080 and 9090, plus DNS
+	return fmt.Sprintf("%s and not (host %s and (port 8080 or port 9090))", baseFilter, hubIP)
 }

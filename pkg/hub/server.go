@@ -41,6 +41,10 @@ type Server struct {
 	// PCAP storage
 	pcapBuffer  *PCAPBuffer
 
+	// Pause state - when true, PCAP data is not stored
+	paused      bool
+	pausedMutex sync.RWMutex
+
 	// Kubernetes client for terminal exec (initialized lazily)
 	k8sClient     kubernetes.Interface
 	k8sRestConfig *rest.Config
@@ -93,6 +97,7 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("/api/pcap/", s.handleDownloadStreamPCAP)
 	mux.HandleFunc("/api/stats", s.handleStats)
 	mux.HandleFunc("/api/agents", s.handleAgents)
+	mux.HandleFunc("/api/pause", s.handlePause)
 	mux.HandleFunc("/api/terminal/ws", s.handleTerminalWebSocket)
 
 	// Serve static UI files
@@ -208,6 +213,55 @@ func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"status": "registered"})
 }
 
+// handlePause handles pause/resume requests
+func (s *Server) handlePause(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	switch r.Method {
+	case http.MethodGet:
+		// Return current pause state
+		s.pausedMutex.RLock()
+		paused := s.paused
+		s.pausedMutex.RUnlock()
+
+		json.NewEncoder(w).Encode(map[string]bool{"paused": paused})
+
+	case http.MethodPost:
+		// Toggle or set pause state
+		var req struct {
+			Paused *bool `json:"paused"`
+		}
+
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			// If no body, toggle the state
+			s.pausedMutex.Lock()
+			s.paused = !s.paused
+			paused := s.paused
+			s.pausedMutex.Unlock()
+
+			log.Printf("Capture %s (toggled)", map[bool]string{true: "paused", false: "resumed"}[paused])
+			json.NewEncoder(w).Encode(map[string]bool{"paused": paused})
+			return
+		}
+
+		// Set to specific state
+		if req.Paused != nil {
+			s.pausedMutex.Lock()
+			s.paused = *req.Paused
+			paused := s.paused
+			s.pausedMutex.Unlock()
+
+			log.Printf("Capture %s", map[bool]string{true: "paused", false: "resumed"}[paused])
+			json.NewEncoder(w).Encode(map[string]bool{"paused": paused})
+		} else {
+			http.Error(w, "Missing 'paused' field", http.StatusBadRequest)
+		}
+
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
 // handleFlowsWebSocket handles WebSocket connections for live flow updates
 func (s *Server) handleFlowsWebSocket(w http.ResponseWriter, r *http.Request) {
 	conn, err := s.wsUpgrader.Upgrade(w, r, nil)
@@ -290,6 +344,10 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	clientCount := len(s.wsClients)
 	s.wsMutex.Unlock()
 
+	s.pausedMutex.RLock()
+	paused := s.paused
+	s.pausedMutex.RUnlock()
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"flows":        flowCount,
@@ -297,6 +355,7 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		"pcapSize":     s.pcapBuffer.Size(),
 		"sessionId":    s.sessionID,
 		"uptime":       time.Now().UTC(),
+		"paused":       paused,
 	})
 }
 
@@ -326,6 +385,15 @@ func (s *Server) broadcastFlow(flow *protocol.Flow) {
 
 // AddPCAPData adds raw PCAP data from an agent
 func (s *Server) AddPCAPData(agentID string, data []byte) error {
+	// Check if paused - don't store PCAP data when paused
+	s.pausedMutex.RLock()
+	paused := s.paused
+	s.pausedMutex.RUnlock()
+
+	if paused {
+		return nil // Silently drop PCAP data when paused
+	}
+
 	return s.pcapBuffer.Write(agentID, data)
 }
 

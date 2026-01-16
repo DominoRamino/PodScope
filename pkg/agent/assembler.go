@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -27,6 +28,11 @@ type TCPAssembler struct {
 	flows          map[string]*TCPFlow
 	mutex          sync.RWMutex
 	onFlowComplete func(*protocol.Flow)
+
+	// Agent info for populating pod names
+	agentPodName   string
+	agentNamespace string
+	agentPodIP     string
 }
 
 // TCPFlow represents a TCP connection
@@ -67,10 +73,17 @@ type TCPFlow struct {
 }
 
 // NewTCPAssembler creates a new TCP stream assembler
-func NewTCPAssembler(onComplete func(*protocol.Flow)) *TCPAssembler {
+func NewTCPAssembler(onComplete func(*protocol.Flow), agentInfo *protocol.AgentInfo) *TCPAssembler {
 	a := &TCPAssembler{
 		flows:          make(map[string]*TCPFlow),
 		onFlowComplete: onComplete,
+	}
+
+	// Store agent info for populating pod names in flows
+	if agentInfo != nil {
+		a.agentPodName = agentInfo.PodName
+		a.agentNamespace = agentInfo.Namespace
+		a.agentPodIP = agentInfo.PodIP
 	}
 
 	// Start cleanup goroutine
@@ -398,6 +411,47 @@ func (a *TCPAssembler) completeFlow(key string, flow *TCPFlow) {
 		HTTP:          flow.HTTP,
 		TLS:           flow.TLS,
 	}
+
+	// Populate pod names based on agent info
+	// The agent is injected into a specific pod, so we know its IP
+	// All traffic on the pod's network interface involves this pod
+	log.Printf("DEBUG: completeFlow - agentPodName=%q agentPodIP=%q flow.SrcIP=%s flow.DstIP=%s flow.SrcPort=%d flow.DstPort=%d",
+		a.agentPodName, a.agentPodIP, flow.SrcIP, flow.DstIP, flow.SrcPort, flow.DstPort)
+
+	if a.agentPodName != "" && a.agentNamespace != "" {
+		// Since the agent runs in the target pod's network namespace,
+		// all captured traffic is to/from this pod
+		// Try to match IPs, but also use the pod info as a fallback
+		if a.agentPodIP != "" {
+			if flow.SrcIP == a.agentPodIP {
+				f.SrcPod = a.agentPodName
+				f.SrcNamespace = a.agentNamespace
+				log.Printf("DEBUG: Matched SrcIP=%s to pod %s/%s", flow.SrcIP, a.agentNamespace, a.agentPodName)
+			}
+			if flow.DstIP == a.agentPodIP {
+				f.DstPod = a.agentPodName
+				f.DstNamespace = a.agentNamespace
+				log.Printf("DEBUG: Matched DstIP=%s to pod %s/%s", flow.DstIP, a.agentNamespace, a.agentPodName)
+			}
+		}
+		// If neither IP matched but we have agent info, the source is likely our pod
+		// (since we're capturing on the pod's interface, outgoing traffic has our IP as source)
+		if f.SrcPod == "" && f.DstPod == "" && a.agentPodName != "" {
+			// For outgoing connections (high src port), source is our pod
+			// For incoming connections (listening on low port), dest is our pod
+			if flow.SrcPort > 1024 {
+				f.SrcPod = a.agentPodName
+				f.SrcNamespace = a.agentNamespace
+				log.Printf("DEBUG: Fallback - assigned SrcPod=%s/%s (high src port %d)", a.agentNamespace, a.agentPodName, flow.SrcPort)
+			} else {
+				f.DstPod = a.agentPodName
+				f.DstNamespace = a.agentNamespace
+				log.Printf("DEBUG: Fallback - assigned DstPod=%s/%s (low src port %d)", a.agentNamespace, a.agentPodName, flow.SrcPort)
+			}
+		}
+	}
+
+	log.Printf("DEBUG: Final flow - SrcPod=%q DstPod=%q", f.SrcPod, f.DstPod)
 
 	// Calculate timing
 	if flow.SYNSeen && flow.SYNACKSeen {

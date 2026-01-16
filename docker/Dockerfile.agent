@@ -1,7 +1,12 @@
 # PodScope Agent Dockerfile
 # Uses multi-stage build for minimal image with libpcap
 
-FROM golang:1.22-alpine AS builder
+FROM golang:1.24-alpine AS builder
+
+# Build arguments for versioning
+ARG VERSION=dev
+ARG BUILD_DATE=unknown
+ARG GIT_COMMIT=unknown
 
 WORKDIR /app
 
@@ -15,14 +20,26 @@ RUN go mod download
 # Copy source
 COPY . .
 
-# Build with static linking
+# Build with static linking and version info
 RUN CGO_ENABLED=1 GOOS=linux go build \
-    -ldflags '-extldflags "-static"' \
+    -ldflags "-extldflags '-static' -X main.Version=${VERSION} -X main.BuildDate=${BUILD_DATE} -X main.GitCommit=${GIT_COMMIT}" \
     -tags netgo \
     -o agent ./cmd/agent
 
 # Final minimal image
 FROM alpine:3.19
+
+# Build arguments for labels
+ARG VERSION=dev
+ARG BUILD_DATE=unknown
+ARG GIT_COMMIT=unknown
+
+# Add labels for image metadata
+LABEL org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.created="${BUILD_DATE}" \
+      org.opencontainers.image.revision="${GIT_COMMIT}" \
+      org.opencontainers.image.title="PodScope Agent" \
+      org.opencontainers.image.description="Network traffic capture agent for Kubernetes pods"
 
 # Install libpcap runtime and network diagnostic tools
 RUN apk add --no-cache \

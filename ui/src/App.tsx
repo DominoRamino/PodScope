@@ -16,16 +16,15 @@ function App() {
   const [selectedFlow, setSelectedFlow] = useState<Flow | null>(null)
   const [connected, setConnected] = useState(false)
   const [filter, setFilter] = useState('')
-  const [stats, setStats] = useState({ flows: 0, wsClients: 0, pcapSize: 0 })
-  const [isPaused, setIsPaused] = useState(false)
+  const [stats, setStats] = useState({ flows: 0, wsClients: 0, pcapSize: 0, paused: false })
   const [terminalTarget, setTerminalTarget] = useState<TerminalTarget | null>(null)
   const [terminalMaximized, setTerminalMaximized] = useState(false)
 
   // Use ref for pause state to avoid WebSocket reconnection on state change
   const isPausedRef = useRef(false)
   useEffect(() => {
-    isPausedRef.current = isPaused
-  }, [isPaused])
+    isPausedRef.current = stats.paused
+  }, [stats.paused])
 
   // WebSocket connection for live updates
   useEffect(() => {
@@ -140,6 +139,23 @@ function App() {
     }
   }, [])
 
+  // Toggle pause state - calls the hub API to pause/resume PCAP capture
+  const handleTogglePause = useCallback(async () => {
+    try {
+      const res = await fetch('/api/pause', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ paused: !stats.paused }),
+      })
+      if (res.ok) {
+        const data = await res.json()
+        setStats(prev => ({ ...prev, paused: data.paused }))
+      }
+    } catch (err) {
+      console.error('Failed to toggle pause:', err)
+    }
+  }, [stats.paused])
+
   const handleDownloadPCAP = useCallback(async (streamId?: string) => {
     try {
       const url = streamId ? `/api/pcap/${streamId}` : '/api/pcap'
@@ -169,8 +185,8 @@ function App() {
         filter={filter}
         onFilterChange={setFilter}
         onDownloadPCAP={() => handleDownloadPCAP()}
-        isPaused={isPaused}
-        onTogglePause={() => setIsPaused(p => !p)}
+        isPaused={stats.paused}
+        onTogglePause={handleTogglePause}
       />
 
       <div className={`flex-1 flex overflow-hidden ${terminalTarget && !terminalMaximized ? 'h-[calc(100%-20rem)]' : ''}`}>

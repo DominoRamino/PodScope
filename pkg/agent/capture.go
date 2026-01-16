@@ -62,8 +62,8 @@ func NewCapturer(iface string, agentInfo *protocol.AgentInfo, hubClient *HubClie
 		agentInfo: agentInfo,
 	}
 
-	// Initialize TCP assembler
-	c.assembler = NewTCPAssembler(c.onFlowComplete)
+	// Initialize TCP assembler with agent info for pod name population
+	c.assembler = NewTCPAssembler(c.onFlowComplete, agentInfo)
 
 	return c
 }
@@ -84,9 +84,14 @@ func (c *Capturer) Start(ctx context.Context) error {
 
 	// Set BPF filter if specified
 	if c.bpfFilter != "" {
+		log.Printf("Applying BPF filter to pcap handle: %s", c.bpfFilter)
 		if err := handle.SetBPFFilter(c.bpfFilter); err != nil {
+			log.Printf("ERROR: Failed to set BPF filter: %v", err)
 			return fmt.Errorf("failed to set BPF filter: %w", err)
 		}
+		log.Printf("SUCCESS: BPF filter applied to pcap handle")
+	} else {
+		log.Printf("WARNING: No BPF filter set - capturing ALL traffic!")
 	}
 
 	// Write PCAP header
@@ -135,6 +140,18 @@ func (c *Capturer) processPacket(packet gopacket.Packet) {
 	transportLayer := packet.TransportLayer()
 	if transportLayer == nil {
 		return
+	}
+
+	// DEBUG: Log DNS packets that get through BPF filter
+	switch tl := transportLayer.(type) {
+	case *layers.TCP:
+		if tl.SrcPort == 53 || tl.DstPort == 53 {
+			log.Printf("WARNING: DNS TCP packet captured despite BPF filter! %d->%d", tl.SrcPort, tl.DstPort)
+		}
+	case *layers.UDP:
+		if tl.SrcPort == 53 || tl.DstPort == 53 {
+			log.Printf("WARNING: DNS UDP packet captured despite BPF filter! %d->%d", tl.SrcPort, tl.DstPort)
+		}
 	}
 
 	switch transportLayer.LayerType() {

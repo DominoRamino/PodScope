@@ -23,12 +23,21 @@ import (
 	"k8s.io/kubectl/pkg/scheme"
 )
 
-const (
-	// AgentImage is the container image for the capture agent
-	AgentImage = "podscope-agent:latest"
-	// HubImage is the container image for the hub
-	HubImage = "podscope:latest"
-)
+// GetAgentImage returns the agent image to use, checking env var first
+func GetAgentImage() string {
+	if img := os.Getenv("PODSCOPE_AGENT_IMAGE"); img != "" {
+		return img
+	}
+	return "podscope-agent:latest"
+}
+
+// GetHubImage returns the hub image to use, checking env var first
+func GetHubImage() string {
+	if img := os.Getenv("PODSCOPE_HUB_IMAGE"); img != "" {
+		return img
+	}
+	return "podscope:latest"
+}
 
 // Session manages a PodScope capture session
 type Session struct {
@@ -130,7 +139,7 @@ func (s *Session) deployHub(ctx context.Context) error {
 					Containers: []corev1.Container{
 						{
 							Name:            "hub",
-							Image:           HubImage,
+							Image:           GetHubImage(),
 							ImagePullPolicy: corev1.PullIfNotPresent,
 							Ports: []corev1.ContainerPort{
 								{
@@ -286,7 +295,7 @@ func (s *Session) InjectAgent(ctx context.Context, target PodTarget, privileged 
 	ephemeralContainer := corev1.EphemeralContainer{
 		EphemeralContainerCommon: corev1.EphemeralContainerCommon{
 			Name:            agentName,
-			Image:           AgentImage,
+			Image:           GetAgentImage(),
 			ImagePullPolicy: corev1.PullIfNotPresent,
 			SecurityContext: securityContext,
 			Env: []corev1.EnvVar{

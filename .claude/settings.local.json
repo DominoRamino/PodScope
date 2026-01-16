@@ -13,7 +13,17 @@
       "Bash(kubectl get:*)",
       "Bash(kubectl describe:*)",
       "Bash(kubectl logs:*)",
-      "Bash(kubectl run:*)"
+      "Bash(kubectl run:*)",
+      "Bash(minikube image load:*)",
+      "Bash(make build-hub:*)",
+      "Bash(make load:*)",
+      "Bash(while read pod)",
+      "Bash(do echo \"  - $pod \\(has agent\\)\")",
+      "Bash(done)",
+      "Bash(echo \"   kubectl logs <new-pod-name> -n default -c podscope-agent-XXXX --tail=100 | grep -E ''BPF|DEBUG|WARNING''\")",
+      "Bash(echo:*)",
+      "Bash(make build-cli:*)",
+      "Bash(./podscope:*)"
     ]
   }
 }
