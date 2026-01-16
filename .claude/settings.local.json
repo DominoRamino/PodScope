@@ -23,7 +23,15 @@
       "Bash(echo \"   kubectl logs <new-pod-name> -n default -c podscope-agent-XXXX --tail=100 | grep -E ''BPF|DEBUG|WARNING''\")",
       "Bash(echo:*)",
       "Bash(make build-cli:*)",
-      "Bash(./podscope:*)"
+      "Bash(./podscope:*)",
+      "Bash(make version:*)",
+      "Bash(make build:*)",
+      "Bash(docker inspect:*)",
+      "Bash(minikube image:*)",
+      "Bash(while read ns)",
+      "Bash(do)",
+      "Bash(minikube ssh:*)",
+      "Bash(chmod +x test-bpf-filter.sh debug.sh ls -lh *.sh)"
     ]
   }
 }

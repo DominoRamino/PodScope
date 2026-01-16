@@ -1,4 +1,4 @@
-.PHONY: all build build-agent build-hub build-cli load clean help
+.PHONY: all build build-agent build-hub build-cli load clean help version inspect use-tag
 
 # Default target
 all: build-cli build load
@@ -15,13 +15,18 @@ IMAGE_TAG := v$(VERSION)-$(shell date -u +"%Y%m%d-%H%M%S")
 help:
 	@echo "PodScope Build Targets:"
 	@echo "  make build-cli   - Build the podscope CLI binary"
-	@echo "  make build       - Build both agent and hub images (parallel)"
+	@echo "  make build       - Build both agent and hub images (parallel, with version tags)"
 	@echo "  make build-agent - Build only agent image"
 	@echo "  make build-hub   - Build only hub image"
 	@echo "  make load        - Load images into minikube"
 	@echo "  make all         - Build CLI and images, then load (default)"
 	@echo "  make clean       - Remove built images and binary"
 	@echo "  make rebuild     - Clean and rebuild everything"
+	@echo ""
+	@echo "Version Management:"
+	@echo "  make version     - Show current version info"
+	@echo "  make inspect     - Inspect image labels"
+	@echo "  make use-tag     - Show how to use specific image tags"
 
 # Build the CLI binary
 build-cli:
@@ -75,6 +80,32 @@ load:
 	@minikube image load podscope-agent:latest
 	@minikube image load podscope:latest
 	@echo "✓ Images loaded into minikube"
+
+# Use a specific tagged version
+use-tag:
+	@echo "To use a specific image tag, set these env vars:"
+	@echo "  export PODSCOPE_AGENT_IMAGE=podscope-agent:$(IMAGE_TAG)"
+	@echo "  export PODSCOPE_HUB_IMAGE=podscope:$(IMAGE_TAG)"
+	@echo ""
+	@echo "Then run: ./podscope tap ..."
+	@echo ""
+	@echo "Or set them inline:"
+	@echo "  PODSCOPE_AGENT_IMAGE=podscope-agent:$(IMAGE_TAG) ./podscope tap ..."
+
+# Show current version info
+version:
+	@echo "Version: $(VERSION)"
+	@echo "Tag: $(IMAGE_TAG)"
+	@echo "Commit: $(GIT_COMMIT)"
+	@echo "Build Date: $(BUILD_DATE)"
+
+# Inspect image labels
+inspect:
+	@echo "Agent image labels:"
+	@docker inspect podscope-agent:latest | jq '.[0].Config.Labels' || true
+	@echo ""
+	@echo "Hub image labels:"
+	@docker inspect podscope:latest | jq '.[0].Config.Labels' || true
 
 # Clean up images and binary
 clean:
