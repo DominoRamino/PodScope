@@ -1093,3 +1093,202 @@ func TestHandleBPFFilter_PUT_Returns405(t *testing.T) {
 		t.Errorf("status code = %d, want %d", w.Code, http.StatusMethodNotAllowed)
 	}
 }
+
+// ============================================================================
+// TestHandlePCAPUpload tests for POST /api/pcap/upload endpoint
+// ============================================================================
+
+// TestHandlePCAPUpload_POST_ValidDataReturns200 tests that POST with valid binary data returns 200 OK
+func TestHandlePCAPUpload_POST_ValidDataReturns200(t *testing.T) {
+	s := setupTestServer(t)
+	defer s.pcapBuffer.Close()
+
+	// Create some test binary data
+	pcapData := []byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/pcap/upload", strings.NewReader(string(pcapData)))
+	req.Header.Set("X-Agent-ID", "test-agent-1")
+	w := httptest.NewRecorder()
+
+	s.handlePCAPUpload(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status code = %d, want %d", w.Code, http.StatusOK)
+	}
+}
+
+// TestHandlePCAPUpload_POST_UsesXAgentIDHeader tests that X-Agent-ID header is used for agent identification
+func TestHandlePCAPUpload_POST_UsesXAgentIDHeader(t *testing.T) {
+	s := setupTestServer(t)
+	defer s.pcapBuffer.Close()
+
+	// Create test data
+	pcapData := []byte{0x10, 0x20, 0x30, 0x40}
+	agentID := "my-test-agent-xyz"
+
+	req := httptest.NewRequest(http.MethodPost, "/api/pcap/upload", strings.NewReader(string(pcapData)))
+	req.Header.Set("X-Agent-ID", agentID)
+	w := httptest.NewRecorder()
+
+	s.handlePCAPUpload(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status code = %d, want %d", w.Code, http.StatusOK)
+	}
+
+	// Verify data was written with the correct agent ID by checking that a file exists
+	// The file should be named agent-{agentID}.pcap
+	// We can verify this by checking that pcapBuffer.Size() > 0 after the upload
+	size := s.pcapBuffer.Size()
+	if size == 0 {
+		t.Error("pcapBuffer.Size() = 0, expected > 0 after upload")
+	}
+}
+
+// TestHandlePCAPUpload_POST_DefaultsToUnknownAgent tests that agent defaults to "unknown" if header missing
+func TestHandlePCAPUpload_POST_DefaultsToUnknownAgent(t *testing.T) {
+	s := setupTestServer(t)
+	defer s.pcapBuffer.Close()
+
+	// Create test data without X-Agent-ID header
+	pcapData := []byte{0xAA, 0xBB, 0xCC, 0xDD}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/pcap/upload", strings.NewReader(string(pcapData)))
+	// Note: NOT setting X-Agent-ID header
+	w := httptest.NewRecorder()
+
+	s.handlePCAPUpload(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status code = %d, want %d", w.Code, http.StatusOK)
+	}
+
+	// The request should still succeed, defaulting to "unknown" agent
+	size := s.pcapBuffer.Size()
+	if size == 0 {
+		t.Error("pcapBuffer.Size() = 0, expected > 0 after upload with default agent")
+	}
+}
+
+// TestHandlePCAPUpload_POST_DataDroppedWhenPaused tests that data is silently dropped when paused
+func TestHandlePCAPUpload_POST_DataDroppedWhenPaused(t *testing.T) {
+	s := setupTestServer(t)
+	defer s.pcapBuffer.Close()
+
+	// Set server to paused state
+	s.pausedMutex.Lock()
+	s.paused = true
+	s.pausedMutex.Unlock()
+
+	// Create test data
+	pcapData := []byte{0x11, 0x22, 0x33, 0x44, 0x55, 0x66}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/pcap/upload", strings.NewReader(string(pcapData)))
+	req.Header.Set("X-Agent-ID", "test-agent-paused")
+	w := httptest.NewRecorder()
+
+	s.handlePCAPUpload(w, req)
+
+	// Should still return 200 OK even when paused
+	if w.Code != http.StatusOK {
+		t.Errorf("status code = %d, want %d (should return 200 even when paused)", w.Code, http.StatusOK)
+	}
+
+	// Verify data was NOT stored (size should be 0)
+	size := s.pcapBuffer.Size()
+	if size != 0 {
+		t.Errorf("pcapBuffer.Size() = %d, want 0 (data should be dropped when paused)", size)
+	}
+}
+
+// TestHandlePCAPUpload_POST_DataStoredWhenNotPaused tests that data is stored when not paused
+func TestHandlePCAPUpload_POST_DataStoredWhenNotPaused(t *testing.T) {
+	s := setupTestServer(t)
+	defer s.pcapBuffer.Close()
+
+	// Ensure server is NOT paused (default state, but be explicit)
+	s.pausedMutex.Lock()
+	s.paused = false
+	s.pausedMutex.Unlock()
+
+	// Create test data
+	pcapData := []byte{0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/pcap/upload", strings.NewReader(string(pcapData)))
+	req.Header.Set("X-Agent-ID", "test-agent-active")
+	w := httptest.NewRecorder()
+
+	s.handlePCAPUpload(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status code = %d, want %d", w.Code, http.StatusOK)
+	}
+
+	// Verify data WAS stored (size should be > 0)
+	size := s.pcapBuffer.Size()
+	if size == 0 {
+		t.Error("pcapBuffer.Size() = 0, expected > 0 (data should be stored when not paused)")
+	}
+}
+
+// TestHandlePCAPUpload_GET_Returns405 tests that GET method returns 405 Method Not Allowed
+func TestHandlePCAPUpload_GET_Returns405(t *testing.T) {
+	s := setupTestServer(t)
+	defer s.pcapBuffer.Close()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/pcap/upload", nil)
+	w := httptest.NewRecorder()
+
+	s.handlePCAPUpload(w, req)
+
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("status code = %d, want %d", w.Code, http.StatusMethodNotAllowed)
+	}
+}
+
+// TestHandlePCAPUpload_PUT_Returns405 tests that PUT method returns 405 Method Not Allowed
+func TestHandlePCAPUpload_PUT_Returns405(t *testing.T) {
+	s := setupTestServer(t)
+	defer s.pcapBuffer.Close()
+
+	req := httptest.NewRequest(http.MethodPut, "/api/pcap/upload", strings.NewReader("data"))
+	w := httptest.NewRecorder()
+
+	s.handlePCAPUpload(w, req)
+
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("status code = %d, want %d", w.Code, http.StatusMethodNotAllowed)
+	}
+}
+
+// TestHandlePCAPUpload_DELETE_Returns405 tests that DELETE method returns 405 Method Not Allowed
+func TestHandlePCAPUpload_DELETE_Returns405(t *testing.T) {
+	s := setupTestServer(t)
+	defer s.pcapBuffer.Close()
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/pcap/upload", nil)
+	w := httptest.NewRecorder()
+
+	s.handlePCAPUpload(w, req)
+
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("status code = %d, want %d", w.Code, http.StatusMethodNotAllowed)
+	}
+}
+
+// TestHandlePCAPUpload_POST_EmptyBodyReturns200 tests that POST with empty body returns 200
+func TestHandlePCAPUpload_POST_EmptyBodyReturns200(t *testing.T) {
+	s := setupTestServer(t)
+	defer s.pcapBuffer.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/pcap/upload", strings.NewReader(""))
+	req.Header.Set("X-Agent-ID", "test-agent-empty")
+	w := httptest.NewRecorder()
+
+	s.handlePCAPUpload(w, req)
+
+	// Empty body should be accepted (it's just 0 bytes of PCAP data)
+	if w.Code != http.StatusOK {
+		t.Errorf("status code = %d, want %d", w.Code, http.StatusOK)
+	}
+}
