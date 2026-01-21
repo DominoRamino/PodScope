@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -821,5 +822,432 @@ func TestGetPodsBySelector_MultiLabelSelector(t *testing.T) {
 
 	if len(targets) > 0 && targets[0].Name != "match-both" {
 		t.Errorf("expected 'match-both' pod, got %q", targets[0].Name)
+	}
+}
+
+// CleanupStaleSessions is a test version that uses the fake clientset
+func (tc *testClient) CleanupStaleSessions(ctx context.Context, maxAge time.Duration) (int, error) {
+	// List all namespaces with podscope label
+	namespaces, err := tc.fakeClientset.CoreV1().Namespaces().List(ctx, metav1.ListOptions{
+		LabelSelector: "app.kubernetes.io/managed-by=podscope-cli",
+	})
+	if err != nil {
+		return 0, err
+	}
+
+	cleaned := 0
+	now := time.Now().UTC()
+
+	for _, ns := range namespaces.Items {
+		// Check creation timestamp from annotation
+		createdAtStr, ok := ns.Annotations["podscope.io/created-at"]
+		if !ok {
+			// Fallback to namespace creation time if annotation missing
+			createdAtStr = ns.CreationTimestamp.Format(time.RFC3339)
+		}
+
+		createdAt, err := time.Parse(time.RFC3339, createdAtStr)
+		if err != nil {
+			continue
+		}
+
+		age := now.Sub(createdAt)
+		if age > maxAge {
+			err := tc.fakeClientset.CoreV1().Namespaces().Delete(ctx, ns.Name, metav1.DeleteOptions{})
+			if err != nil {
+				continue
+			}
+			cleaned++
+		}
+	}
+
+	return cleaned, nil
+}
+
+// createPodscopeNamespace creates a namespace with podscope labels and annotations for testing
+func createPodscopeNamespace(t *testing.T, tc *testClient, ctx context.Context, name string, createdAt time.Time) {
+	t.Helper()
+	ns := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name,
+			Labels: map[string]string{
+				"app.kubernetes.io/name":       "podscope",
+				"app.kubernetes.io/managed-by": "podscope-cli",
+			},
+			Annotations: map[string]string{
+				"podscope.io/created-at": createdAt.Format(time.RFC3339),
+			},
+		},
+	}
+
+	_, err := tc.fakeClientset.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{})
+	if err != nil {
+		t.Fatalf("failed to create namespace: %v", err)
+	}
+}
+
+// createPodscopeNamespaceWithoutAnnotation creates a namespace with podscope labels but no created-at annotation
+func createPodscopeNamespaceWithoutAnnotation(t *testing.T, tc *testClient, ctx context.Context, name string) {
+	t.Helper()
+	ns := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name,
+			Labels: map[string]string{
+				"app.kubernetes.io/name":       "podscope",
+				"app.kubernetes.io/managed-by": "podscope-cli",
+			},
+		},
+	}
+
+	_, err := tc.fakeClientset.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{})
+	if err != nil {
+		t.Fatalf("failed to create namespace: %v", err)
+	}
+}
+
+// createNonPodscopeNamespace creates a namespace without podscope labels
+func createNonPodscopeNamespace(t *testing.T, tc *testClient, ctx context.Context, name string, createdAt time.Time) {
+	t.Helper()
+	ns := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name,
+			Labels: map[string]string{
+				"app.kubernetes.io/name": "other-app",
+			},
+			Annotations: map[string]string{
+				"podscope.io/created-at": createdAt.Format(time.RFC3339),
+			},
+		},
+	}
+
+	_, err := tc.fakeClientset.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{})
+	if err != nil {
+		t.Fatalf("failed to create namespace: %v", err)
+	}
+}
+
+// TestCleanupStaleSessions_DeletesNamespacesOlderThanMaxAge tests that old namespaces are deleted
+func TestCleanupStaleSessions_DeletesNamespacesOlderThanMaxAge(t *testing.T) {
+	tc := createTestClient(t)
+	ctx := context.Background()
+
+	// Create a namespace that is 2 hours old
+	oldTime := time.Now().UTC().Add(-2 * time.Hour)
+	createPodscopeNamespace(t, tc, ctx, "podscope-old-session", oldTime)
+
+	// Cleanup namespaces older than 1 hour
+	cleaned, err := tc.CleanupStaleSessions(ctx, 1*time.Hour)
+	if err != nil {
+		t.Fatalf("CleanupStaleSessions failed: %v", err)
+	}
+
+	if cleaned != 1 {
+		t.Errorf("expected 1 namespace cleaned, got %d", cleaned)
+	}
+
+	// Verify namespace was deleted
+	_, err = tc.fakeClientset.CoreV1().Namespaces().Get(ctx, "podscope-old-session", metav1.GetOptions{})
+	if err == nil {
+		t.Error("expected namespace to be deleted, but it still exists")
+	}
+}
+
+// TestCleanupStaleSessions_KeepsNamespacesNewerThanMaxAge tests that new namespaces are kept
+func TestCleanupStaleSessions_KeepsNamespacesNewerThanMaxAge(t *testing.T) {
+	tc := createTestClient(t)
+	ctx := context.Background()
+
+	// Create a namespace that is 30 minutes old
+	newTime := time.Now().UTC().Add(-30 * time.Minute)
+	createPodscopeNamespace(t, tc, ctx, "podscope-new-session", newTime)
+
+	// Cleanup namespaces older than 1 hour
+	cleaned, err := tc.CleanupStaleSessions(ctx, 1*time.Hour)
+	if err != nil {
+		t.Fatalf("CleanupStaleSessions failed: %v", err)
+	}
+
+	if cleaned != 0 {
+		t.Errorf("expected 0 namespaces cleaned, got %d", cleaned)
+	}
+
+	// Verify namespace still exists
+	ns, err := tc.fakeClientset.CoreV1().Namespaces().Get(ctx, "podscope-new-session", metav1.GetOptions{})
+	if err != nil {
+		t.Errorf("expected namespace to still exist, but got error: %v", err)
+	}
+	if ns == nil {
+		t.Error("expected namespace to still exist, but it was nil")
+	}
+}
+
+// TestCleanupStaleSessions_UsesCreatedAtAnnotationForAge tests that the annotation is used for age calculation
+func TestCleanupStaleSessions_UsesCreatedAtAnnotationForAge(t *testing.T) {
+	tc := createTestClient(t)
+	ctx := context.Background()
+
+	// Create namespace with old annotation timestamp
+	oldTime := time.Now().UTC().Add(-3 * time.Hour)
+	createPodscopeNamespace(t, tc, ctx, "podscope-annotated-session", oldTime)
+
+	// Cleanup namespaces older than 2 hours
+	cleaned, err := tc.CleanupStaleSessions(ctx, 2*time.Hour)
+	if err != nil {
+		t.Fatalf("CleanupStaleSessions failed: %v", err)
+	}
+
+	if cleaned != 1 {
+		t.Errorf("expected 1 namespace cleaned based on annotation age, got %d", cleaned)
+	}
+
+	// Verify namespace was deleted
+	_, err = tc.fakeClientset.CoreV1().Namespaces().Get(ctx, "podscope-annotated-session", metav1.GetOptions{})
+	if err == nil {
+		t.Error("expected namespace to be deleted based on annotation age")
+	}
+}
+
+// TestCleanupStaleSessions_OnlyTargetsPodscopeNamespaces tests that non-podscope namespaces are ignored
+func TestCleanupStaleSessions_OnlyTargetsPodscopeNamespaces(t *testing.T) {
+	tc := createTestClient(t)
+	ctx := context.Background()
+
+	// Create an old podscope namespace
+	oldTime := time.Now().UTC().Add(-2 * time.Hour)
+	createPodscopeNamespace(t, tc, ctx, "podscope-old", oldTime)
+
+	// Create an old non-podscope namespace
+	createNonPodscopeNamespace(t, tc, ctx, "other-app-old", oldTime)
+
+	// Cleanup namespaces older than 1 hour
+	cleaned, err := tc.CleanupStaleSessions(ctx, 1*time.Hour)
+	if err != nil {
+		t.Fatalf("CleanupStaleSessions failed: %v", err)
+	}
+
+	// Only the podscope namespace should be cleaned
+	if cleaned != 1 {
+		t.Errorf("expected 1 namespace cleaned (only podscope), got %d", cleaned)
+	}
+
+	// Verify podscope namespace was deleted
+	_, err = tc.fakeClientset.CoreV1().Namespaces().Get(ctx, "podscope-old", metav1.GetOptions{})
+	if err == nil {
+		t.Error("expected podscope namespace to be deleted")
+	}
+
+	// Verify non-podscope namespace still exists
+	ns, err := tc.fakeClientset.CoreV1().Namespaces().Get(ctx, "other-app-old", metav1.GetOptions{})
+	if err != nil {
+		t.Errorf("expected non-podscope namespace to still exist, got error: %v", err)
+	}
+	if ns == nil {
+		t.Error("expected non-podscope namespace to still exist")
+	}
+}
+
+// TestCleanupStaleSessions_ReturnsCountOfDeletedNamespaces tests that the correct count is returned
+func TestCleanupStaleSessions_ReturnsCountOfDeletedNamespaces(t *testing.T) {
+	tc := createTestClient(t)
+	ctx := context.Background()
+
+	// Create multiple old namespaces
+	oldTime := time.Now().UTC().Add(-2 * time.Hour)
+	createPodscopeNamespace(t, tc, ctx, "podscope-session-1", oldTime)
+	createPodscopeNamespace(t, tc, ctx, "podscope-session-2", oldTime)
+	createPodscopeNamespace(t, tc, ctx, "podscope-session-3", oldTime)
+
+	// Create one new namespace
+	newTime := time.Now().UTC().Add(-10 * time.Minute)
+	createPodscopeNamespace(t, tc, ctx, "podscope-session-new", newTime)
+
+	// Cleanup namespaces older than 1 hour
+	cleaned, err := tc.CleanupStaleSessions(ctx, 1*time.Hour)
+	if err != nil {
+		t.Fatalf("CleanupStaleSessions failed: %v", err)
+	}
+
+	if cleaned != 3 {
+		t.Errorf("expected 3 namespaces cleaned, got %d", cleaned)
+	}
+}
+
+// TestCleanupStaleSessions_ReturnsZeroWhenNoStaleNamespaces tests that 0 is returned when nothing to clean
+func TestCleanupStaleSessions_ReturnsZeroWhenNoStaleNamespaces(t *testing.T) {
+	tc := createTestClient(t)
+	ctx := context.Background()
+
+	// Create only new namespaces
+	newTime := time.Now().UTC().Add(-5 * time.Minute)
+	createPodscopeNamespace(t, tc, ctx, "podscope-fresh-1", newTime)
+	createPodscopeNamespace(t, tc, ctx, "podscope-fresh-2", newTime)
+
+	// Cleanup namespaces older than 1 hour
+	cleaned, err := tc.CleanupStaleSessions(ctx, 1*time.Hour)
+	if err != nil {
+		t.Fatalf("CleanupStaleSessions failed: %v", err)
+	}
+
+	if cleaned != 0 {
+		t.Errorf("expected 0 namespaces cleaned, got %d", cleaned)
+	}
+}
+
+// TestCleanupStaleSessions_HandlesEmptyNamespaceList tests behavior with no podscope namespaces
+func TestCleanupStaleSessions_HandlesEmptyNamespaceList(t *testing.T) {
+	tc := createTestClient(t)
+	ctx := context.Background()
+
+	// Don't create any namespaces
+
+	cleaned, err := tc.CleanupStaleSessions(ctx, 1*time.Hour)
+	if err != nil {
+		t.Fatalf("CleanupStaleSessions failed: %v", err)
+	}
+
+	if cleaned != 0 {
+		t.Errorf("expected 0 namespaces cleaned, got %d", cleaned)
+	}
+}
+
+// TestCleanupStaleSessions_MixedAgesDeletesOnlyOld tests that only old namespaces are deleted in mixed scenarios
+func TestCleanupStaleSessions_MixedAgesDeletesOnlyOld(t *testing.T) {
+	tc := createTestClient(t)
+	ctx := context.Background()
+
+	// Create namespaces with various ages
+	veryOldTime := time.Now().UTC().Add(-24 * time.Hour)
+	oldTime := time.Now().UTC().Add(-2 * time.Hour)
+	newTime := time.Now().UTC().Add(-10 * time.Minute)
+
+	createPodscopeNamespace(t, tc, ctx, "podscope-very-old", veryOldTime)
+	createPodscopeNamespace(t, tc, ctx, "podscope-old", oldTime)
+	createPodscopeNamespace(t, tc, ctx, "podscope-new", newTime)
+
+	// Cleanup namespaces older than 1 hour
+	cleaned, err := tc.CleanupStaleSessions(ctx, 1*time.Hour)
+	if err != nil {
+		t.Fatalf("CleanupStaleSessions failed: %v", err)
+	}
+
+	if cleaned != 2 {
+		t.Errorf("expected 2 namespaces cleaned, got %d", cleaned)
+	}
+
+	// Verify the new namespace still exists
+	ns, err := tc.fakeClientset.CoreV1().Namespaces().Get(ctx, "podscope-new", metav1.GetOptions{})
+	if err != nil {
+		t.Errorf("expected new namespace to still exist, got error: %v", err)
+	}
+	if ns == nil {
+		t.Error("expected new namespace to still exist")
+	}
+
+	// Verify old namespaces were deleted
+	_, err = tc.fakeClientset.CoreV1().Namespaces().Get(ctx, "podscope-very-old", metav1.GetOptions{})
+	if err == nil {
+		t.Error("expected very old namespace to be deleted")
+	}
+	_, err = tc.fakeClientset.CoreV1().Namespaces().Get(ctx, "podscope-old", metav1.GetOptions{})
+	if err == nil {
+		t.Error("expected old namespace to be deleted")
+	}
+}
+
+// TestCleanupStaleSessions_UsesAppLabel tests that the correct label selector is used
+func TestCleanupStaleSessions_UsesAppLabel(t *testing.T) {
+	tc := createTestClient(t)
+	ctx := context.Background()
+
+	// Create namespace with podscope label
+	oldTime := time.Now().UTC().Add(-2 * time.Hour)
+	createPodscopeNamespace(t, tc, ctx, "podscope-labeled", oldTime)
+
+	// Create namespace with different managed-by label
+	ns := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "different-managed-by",
+			Labels: map[string]string{
+				"app.kubernetes.io/name":       "podscope",
+				"app.kubernetes.io/managed-by": "helm",
+			},
+			Annotations: map[string]string{
+				"podscope.io/created-at": oldTime.Format(time.RFC3339),
+			},
+		},
+	}
+	_, err := tc.fakeClientset.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{})
+	if err != nil {
+		t.Fatalf("failed to create namespace: %v", err)
+	}
+
+	// Cleanup should only target podscope-cli managed namespaces
+	cleaned, err := tc.CleanupStaleSessions(ctx, 1*time.Hour)
+	if err != nil {
+		t.Fatalf("CleanupStaleSessions failed: %v", err)
+	}
+
+	if cleaned != 1 {
+		t.Errorf("expected 1 namespace cleaned (only podscope-cli managed), got %d", cleaned)
+	}
+
+	// Verify the helm-managed namespace still exists
+	helmNS, err := tc.fakeClientset.CoreV1().Namespaces().Get(ctx, "different-managed-by", metav1.GetOptions{})
+	if err != nil {
+		t.Errorf("expected helm-managed namespace to still exist, got error: %v", err)
+	}
+	if helmNS == nil {
+		t.Error("expected helm-managed namespace to still exist")
+	}
+}
+
+// TestCleanupStaleSessions_JustUnderMaxAgeBoundary tests namespace just under maxAge is kept
+func TestCleanupStaleSessions_JustUnderMaxAgeBoundary(t *testing.T) {
+	tc := createTestClient(t)
+	ctx := context.Background()
+
+	// Create a namespace that is just under the maxAge boundary (should be kept)
+	// Use 59 minutes to ensure it's clearly under the 1 hour boundary
+	justUnderBoundaryTime := time.Now().UTC().Add(-59 * time.Minute)
+	createPodscopeNamespace(t, tc, ctx, "podscope-just-under", justUnderBoundaryTime)
+
+	// Cleanup namespaces older than 1 hour
+	cleaned, err := tc.CleanupStaleSessions(ctx, 1*time.Hour)
+	if err != nil {
+		t.Fatalf("CleanupStaleSessions failed: %v", err)
+	}
+
+	// The namespace under 1 hour should NOT be deleted (age > maxAge check)
+	if cleaned != 0 {
+		t.Errorf("expected 0 namespaces cleaned just under boundary, got %d", cleaned)
+	}
+
+	// Verify namespace still exists
+	ns, err := tc.fakeClientset.CoreV1().Namespaces().Get(ctx, "podscope-just-under", metav1.GetOptions{})
+	if err != nil {
+		t.Errorf("expected namespace to still exist, got error: %v", err)
+	}
+	if ns == nil {
+		t.Error("expected namespace to still exist")
+	}
+}
+
+// TestCleanupStaleSessions_JustOverMaxAgeBoundary tests namespace just over maxAge is deleted
+func TestCleanupStaleSessions_JustOverMaxAgeBoundary(t *testing.T) {
+	tc := createTestClient(t)
+	ctx := context.Background()
+
+	// Create a namespace that is just over the maxAge boundary (should be deleted)
+	justOverBoundaryTime := time.Now().UTC().Add(-1*time.Hour - 1*time.Second)
+	createPodscopeNamespace(t, tc, ctx, "podscope-just-over", justOverBoundaryTime)
+
+	// Cleanup namespaces older than 1 hour
+	cleaned, err := tc.CleanupStaleSessions(ctx, 1*time.Hour)
+	if err != nil {
+		t.Fatalf("CleanupStaleSessions failed: %v", err)
+	}
+
+	if cleaned != 1 {
+		t.Errorf("expected 1 namespace cleaned just over boundary, got %d", cleaned)
 	}
 }
