@@ -375,6 +375,16 @@ func (s *Session) InjectAgent(ctx context.Context, target PodTarget, privileged 
 			Image:           GetAgentImage(),
 			ImagePullPolicy: corev1.PullIfNotPresent,
 			SecurityContext: securityContext,
+			Resources: corev1.ResourceRequirements{
+				Requests: corev1.ResourceList{
+					corev1.ResourceCPU:    resource.MustParse("50m"),
+					corev1.ResourceMemory: resource.MustParse("64Mi"),
+				},
+				Limits: corev1.ResourceList{
+					corev1.ResourceCPU:    resource.MustParse("200m"),
+					corev1.ResourceMemory: resource.MustParse("256Mi"),
+				},
+			},
 			Env: []corev1.EnvVar{
 				{
 					Name:  "HUB_ADDRESS",
