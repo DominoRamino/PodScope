@@ -1585,3 +1585,399 @@ func TestHandleStats_ReturnsSessionId(t *testing.T) {
 		t.Errorf("sessionId = %q, want %q", sessionId, "test-session")
 	}
 }
+
+// ============================================================================
+// TestHandleAgents tests for POST /api/agents endpoint
+// ============================================================================
+
+// TestHandleAgents_POST_ValidAgentReturns200 tests that POST with valid agent JSON returns 200 OK
+func TestHandleAgents_POST_ValidAgentReturns200(t *testing.T) {
+	s := setupTestServer(t)
+	defer s.pcapBuffer.Close()
+
+	agentJSON := `{
+		"id": "agent-123",
+		"podName": "my-pod",
+		"namespace": "default",
+		"podIP": "10.0.0.5"
+	}`
+
+	req := httptest.NewRequest(http.MethodPost, "/api/agents", strings.NewReader(agentJSON))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	s.handleAgents(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status code = %d, want %d", w.Code, http.StatusOK)
+	}
+}
+
+// TestHandleAgents_POST_ReturnsRegisteredStatus tests that response includes status: registered
+func TestHandleAgents_POST_ReturnsRegisteredStatus(t *testing.T) {
+	s := setupTestServer(t)
+	defer s.pcapBuffer.Close()
+
+	agentJSON := `{
+		"id": "agent-456",
+		"podName": "test-pod",
+		"namespace": "kube-system",
+		"podIP": "192.168.1.10"
+	}`
+
+	req := httptest.NewRequest(http.MethodPost, "/api/agents", strings.NewReader(agentJSON))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	s.handleAgents(w, req)
+
+	var resp map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	status, ok := resp["status"]
+	if !ok {
+		t.Fatal("response missing 'status' field")
+	}
+	if status != "registered" {
+		t.Errorf("status = %q, want %q", status, "registered")
+	}
+}
+
+// TestHandleAgents_POST_InvalidJSONReturns400 tests that POST with invalid JSON returns 400 Bad Request
+func TestHandleAgents_POST_InvalidJSONReturns400(t *testing.T) {
+	s := setupTestServer(t)
+	defer s.pcapBuffer.Close()
+
+	invalidJSON := `{invalid json`
+
+	req := httptest.NewRequest(http.MethodPost, "/api/agents", strings.NewReader(invalidJSON))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	s.handleAgents(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status code = %d, want %d", w.Code, http.StatusBadRequest)
+	}
+}
+
+// TestHandleAgents_POST_EmptyBodyReturns400 tests that POST with empty body returns 400 Bad Request
+func TestHandleAgents_POST_EmptyBodyReturns400(t *testing.T) {
+	s := setupTestServer(t)
+	defer s.pcapBuffer.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/agents", strings.NewReader(""))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	s.handleAgents(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status code = %d, want %d", w.Code, http.StatusBadRequest)
+	}
+}
+
+// TestHandleAgents_GET_Returns405 tests that GET method returns 405 Method Not Allowed
+func TestHandleAgents_GET_Returns405(t *testing.T) {
+	s := setupTestServer(t)
+	defer s.pcapBuffer.Close()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/agents", nil)
+	w := httptest.NewRecorder()
+
+	s.handleAgents(w, req)
+
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("status code = %d, want %d", w.Code, http.StatusMethodNotAllowed)
+	}
+}
+
+// TestHandleAgents_PUT_Returns405 tests that PUT method returns 405 Method Not Allowed
+func TestHandleAgents_PUT_Returns405(t *testing.T) {
+	s := setupTestServer(t)
+	defer s.pcapBuffer.Close()
+
+	req := httptest.NewRequest(http.MethodPut, "/api/agents", strings.NewReader(`{}`))
+	w := httptest.NewRecorder()
+
+	s.handleAgents(w, req)
+
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("status code = %d, want %d", w.Code, http.StatusMethodNotAllowed)
+	}
+}
+
+// TestHandleAgents_DELETE_Returns405 tests that DELETE method returns 405 Method Not Allowed
+func TestHandleAgents_DELETE_Returns405(t *testing.T) {
+	s := setupTestServer(t)
+	defer s.pcapBuffer.Close()
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/agents", nil)
+	w := httptest.NewRecorder()
+
+	s.handleAgents(w, req)
+
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("status code = %d, want %d", w.Code, http.StatusMethodNotAllowed)
+	}
+}
+
+// TestHandleAgents_POST_MinimalAgentDataAccepted tests that minimal agent data is accepted
+func TestHandleAgents_POST_MinimalAgentDataAccepted(t *testing.T) {
+	s := setupTestServer(t)
+	defer s.pcapBuffer.Close()
+
+	// Just the required fields for a minimal agent
+	agentJSON := `{"id": "minimal-agent"}`
+
+	req := httptest.NewRequest(http.MethodPost, "/api/agents", strings.NewReader(agentJSON))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	s.handleAgents(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status code = %d, want %d", w.Code, http.StatusOK)
+	}
+}
+
+// ============================================================================
+// TestHandlePCAPReset tests for POST /api/pcap/reset endpoint
+// ============================================================================
+
+// TestHandlePCAPReset_POST_Returns200 tests that POST returns 200 OK on success
+func TestHandlePCAPReset_POST_Returns200(t *testing.T) {
+	s := setupTestServer(t)
+	defer s.pcapBuffer.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/pcap/reset", nil)
+	w := httptest.NewRecorder()
+
+	s.handlePCAPReset(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status code = %d, want %d", w.Code, http.StatusOK)
+	}
+}
+
+// TestHandlePCAPReset_POST_ReturnsSuccessResponse tests that response includes success: true
+func TestHandlePCAPReset_POST_ReturnsSuccessResponse(t *testing.T) {
+	s := setupTestServer(t)
+	defer s.pcapBuffer.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/pcap/reset", nil)
+	w := httptest.NewRecorder()
+
+	s.handlePCAPReset(w, req)
+
+	var resp map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	success, ok := resp["success"].(bool)
+	if !ok {
+		t.Fatal("response missing 'success' field or not a boolean")
+	}
+	if success != true {
+		t.Errorf("success = %v, want true", success)
+	}
+}
+
+// TestHandlePCAPReset_POST_ReturnsMessage tests that response includes a message
+func TestHandlePCAPReset_POST_ReturnsMessage(t *testing.T) {
+	s := setupTestServer(t)
+	defer s.pcapBuffer.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/pcap/reset", nil)
+	w := httptest.NewRecorder()
+
+	s.handlePCAPReset(w, req)
+
+	var resp map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	message, ok := resp["message"].(string)
+	if !ok {
+		t.Fatal("response missing 'message' field or not a string")
+	}
+	if message == "" {
+		t.Error("message is empty, expected non-empty message")
+	}
+}
+
+// TestHandlePCAPReset_POST_ClearsPCAPBuffer tests that reset clears the PCAP buffer
+func TestHandlePCAPReset_POST_ClearsPCAPBuffer(t *testing.T) {
+	s := setupTestServer(t)
+	defer s.pcapBuffer.Close()
+
+	// First, add some PCAP data
+	s.pausedMutex.Lock()
+	s.paused = false
+	s.pausedMutex.Unlock()
+
+	pcapData := []byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08}
+	s.pcapBuffer.Write("test-agent", pcapData)
+
+	// Verify data was stored
+	sizeBefore := s.pcapBuffer.Size()
+	if sizeBefore == 0 {
+		t.Fatal("precondition failed: pcapBuffer should have data before reset")
+	}
+
+	// Now reset
+	req := httptest.NewRequest(http.MethodPost, "/api/pcap/reset", nil)
+	w := httptest.NewRecorder()
+
+	s.handlePCAPReset(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status code = %d, want %d", w.Code, http.StatusOK)
+	}
+
+	// Verify buffer was cleared
+	sizeAfter := s.pcapBuffer.Size()
+	if sizeAfter != 0 {
+		t.Errorf("pcapBuffer.Size() = %d after reset, want 0", sizeAfter)
+	}
+}
+
+// TestHandlePCAPReset_POST_ReturnsJSONContentType tests that response has JSON content type
+func TestHandlePCAPReset_POST_ReturnsJSONContentType(t *testing.T) {
+	s := setupTestServer(t)
+	defer s.pcapBuffer.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/pcap/reset", nil)
+	w := httptest.NewRecorder()
+
+	s.handlePCAPReset(w, req)
+
+	contentType := w.Header().Get("Content-Type")
+	if contentType != "application/json" {
+		t.Errorf("Content-Type = %q, want %q", contentType, "application/json")
+	}
+}
+
+// TestHandlePCAPReset_GET_Returns405 tests that GET method returns 405 Method Not Allowed
+func TestHandlePCAPReset_GET_Returns405(t *testing.T) {
+	s := setupTestServer(t)
+	defer s.pcapBuffer.Close()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/pcap/reset", nil)
+	w := httptest.NewRecorder()
+
+	s.handlePCAPReset(w, req)
+
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("status code = %d, want %d", w.Code, http.StatusMethodNotAllowed)
+	}
+}
+
+// TestHandlePCAPReset_PUT_Returns405 tests that PUT method returns 405 Method Not Allowed
+func TestHandlePCAPReset_PUT_Returns405(t *testing.T) {
+	s := setupTestServer(t)
+	defer s.pcapBuffer.Close()
+
+	req := httptest.NewRequest(http.MethodPut, "/api/pcap/reset", nil)
+	w := httptest.NewRecorder()
+
+	s.handlePCAPReset(w, req)
+
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("status code = %d, want %d", w.Code, http.StatusMethodNotAllowed)
+	}
+}
+
+// TestHandlePCAPReset_DELETE_Returns405 tests that DELETE method returns 405 Method Not Allowed
+func TestHandlePCAPReset_DELETE_Returns405(t *testing.T) {
+	s := setupTestServer(t)
+	defer s.pcapBuffer.Close()
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/pcap/reset", nil)
+	w := httptest.NewRecorder()
+
+	s.handlePCAPReset(w, req)
+
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("status code = %d, want %d", w.Code, http.StatusMethodNotAllowed)
+	}
+}
+
+// TestHandlePCAPReset_POST_MultipleAgentDataCleared tests that reset clears data from multiple agents
+func TestHandlePCAPReset_POST_MultipleAgentDataCleared(t *testing.T) {
+	s := setupTestServer(t)
+	defer s.pcapBuffer.Close()
+
+	// Add PCAP data from multiple agents
+	s.pausedMutex.Lock()
+	s.paused = false
+	s.pausedMutex.Unlock()
+
+	s.pcapBuffer.Write("agent-1", []byte{0x01, 0x02, 0x03, 0x04})
+	s.pcapBuffer.Write("agent-2", []byte{0x05, 0x06, 0x07, 0x08})
+	s.pcapBuffer.Write("agent-3", []byte{0x09, 0x0A, 0x0B, 0x0C})
+
+	// Verify data was stored
+	sizeBefore := s.pcapBuffer.Size()
+	if sizeBefore == 0 {
+		t.Fatal("precondition failed: pcapBuffer should have data before reset")
+	}
+
+	// Now reset
+	req := httptest.NewRequest(http.MethodPost, "/api/pcap/reset", nil)
+	w := httptest.NewRecorder()
+
+	s.handlePCAPReset(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status code = %d, want %d", w.Code, http.StatusOK)
+	}
+
+	// Verify all data was cleared
+	sizeAfter := s.pcapBuffer.Size()
+	if sizeAfter != 0 {
+		t.Errorf("pcapBuffer.Size() = %d after reset, want 0 (all agent data should be cleared)", sizeAfter)
+	}
+}
+
+// TestHandlePCAPReset_POST_CanWriteAfterReset tests that new data can be written after reset
+func TestHandlePCAPReset_POST_CanWriteAfterReset(t *testing.T) {
+	s := setupTestServer(t)
+	defer s.pcapBuffer.Close()
+
+	// Add initial data
+	s.pausedMutex.Lock()
+	s.paused = false
+	s.pausedMutex.Unlock()
+
+	s.pcapBuffer.Write("agent-1", []byte{0x01, 0x02, 0x03, 0x04})
+
+	// Reset
+	req := httptest.NewRequest(http.MethodPost, "/api/pcap/reset", nil)
+	w := httptest.NewRecorder()
+	s.handlePCAPReset(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("reset failed with status %d", w.Code)
+	}
+
+	// Verify buffer is empty
+	sizeAfterReset := s.pcapBuffer.Size()
+	if sizeAfterReset != 0 {
+		t.Errorf("pcapBuffer.Size() = %d after reset, want 0", sizeAfterReset)
+	}
+
+	// Write new data
+	newData := []byte{0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF}
+	s.pcapBuffer.Write("new-agent", newData)
+
+	// Verify new data was written
+	sizeAfterWrite := s.pcapBuffer.Size()
+	if sizeAfterWrite == 0 {
+		t.Error("pcapBuffer.Size() = 0 after writing new data, expected > 0")
+	}
+}
