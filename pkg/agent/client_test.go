@@ -787,3 +787,300 @@ func TestSendFlow_PostMethodUsed(t *testing.T) {
 		t.Errorf("Expected POST method, got '%s'", methodUsed)
 	}
 }
+
+// TestSendPCAPChunk_DataCopiedBeforeQueuing tests that PCAP data is copied (not referenced) before queuing
+func TestSendPCAPChunk_DataCopiedBeforeQueuing(t *testing.T) {
+	agentInfo := createTestAgentInfo()
+	client := NewHubClient("hub:9090", agentInfo)
+	defer client.Close()
+
+	// Original data
+	originalData := []byte{0x01, 0x02, 0x03, 0x04, 0x05}
+
+	err := client.SendPCAPChunk(originalData)
+	if err != nil {
+		t.Fatalf("Expected nil error, got: %v", err)
+	}
+
+	// Modify the original data after sending
+	originalData[0] = 0xFF
+	originalData[1] = 0xFF
+
+	// Retrieve the queued data
+	select {
+	case queuedData := <-client.pcapChan:
+		// Verify the queued data was NOT affected by the modification
+		if queuedData[0] == 0xFF || queuedData[1] == 0xFF {
+			t.Error("Expected data to be copied, but modification affected queued data")
+		}
+		if queuedData[0] != 0x01 || queuedData[1] != 0x02 {
+			t.Errorf("Expected original bytes [0x01, 0x02], got [0x%02x, 0x%02x]", queuedData[0], queuedData[1])
+		}
+	default:
+		t.Error("Expected PCAP data to be in channel, but channel was empty")
+	}
+}
+
+// TestSendPCAPChunk_ReturnsNilOnSuccess tests that SendPCAPChunk returns nil on successful queue
+func TestSendPCAPChunk_ReturnsNilOnSuccess(t *testing.T) {
+	agentInfo := createTestAgentInfo()
+	client := NewHubClient("hub:9090", agentInfo)
+	defer client.Close()
+
+	data := []byte{0x0a, 0x0b, 0x0c, 0x0d}
+
+	err := client.SendPCAPChunk(data)
+	if err != nil {
+		t.Errorf("Expected SendPCAPChunk to return nil, got: %v", err)
+	}
+}
+
+// TestSendPCAPChunk_ChannelFullReturnsError tests that error is returned when pcap channel is full
+func TestSendPCAPChunk_ChannelFullReturnsError(t *testing.T) {
+	// Create a client with small pcap channel capacity for testing
+	agentInfo := createTestAgentInfo()
+	client := &HubClient{
+		hubURL:    "http://hub:8080",
+		agentInfo: agentInfo,
+		client: &http.Client{
+			Timeout: 10 * time.Second,
+		},
+		flowChan:    make(chan *protocol.Flow, 1000),
+		pcapChan:    make(chan []byte, 2), // Small capacity
+		maxFailures: 3,
+	}
+	client.ctx, client.cancel = context.WithCancel(context.Background())
+	defer client.Close()
+
+	// Fill the channel
+	client.SendPCAPChunk([]byte{0x01})
+	client.SendPCAPChunk([]byte{0x02})
+
+	// Third chunk should return error
+	err := client.SendPCAPChunk([]byte{0x03})
+	if err == nil {
+		t.Error("Expected error when channel is full, got nil")
+	}
+
+	if !strings.Contains(err.Error(), "pcap channel full") {
+		t.Errorf("Expected 'pcap channel full' error message, got: %v", err)
+	}
+}
+
+// TestSendPCAPChunk_MultipleChunksQueued tests that multiple PCAP chunks can be queued
+func TestSendPCAPChunk_MultipleChunksQueued(t *testing.T) {
+	agentInfo := createTestAgentInfo()
+	client := NewHubClient("hub:9090", agentInfo)
+	defer client.Close()
+
+	// Queue multiple PCAP chunks
+	for i := 0; i < 10; i++ {
+		data := []byte{byte(i), byte(i + 1), byte(i + 2)}
+		err := client.SendPCAPChunk(data)
+		if err != nil {
+			t.Errorf("Expected nil error for chunk %d, got: %v", i, err)
+		}
+	}
+
+	// Verify channel has 10 chunks
+	if len(client.pcapChan) != 10 {
+		t.Errorf("Expected 10 chunks in channel, got %d", len(client.pcapChan))
+	}
+}
+
+// TestSendPCAPChunk_SentToHubViaHTTP tests that queued PCAP data is sent to Hub via POST /api/pcap/upload
+func TestSendPCAPChunk_SentToHubViaHTTP(t *testing.T) {
+	var receivedData []byte
+	dataReceived := make(chan bool, 1)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/health":
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"status":    "healthy",
+				"sessionId": "test-session",
+				"bpfFilter": "",
+			})
+		case "/api/agents":
+			w.WriteHeader(http.StatusOK)
+		case "/api/pcap/upload":
+			if r.Method == "POST" {
+				buf := new(bytes.Buffer)
+				buf.ReadFrom(r.Body)
+				receivedData = buf.Bytes()
+				dataReceived <- true
+			}
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	client := createClientForTestServer(t, server.URL)
+	client.ctx, client.cancel = context.WithCancel(context.Background())
+	defer client.Close()
+
+	// Mark as connected and start the PCAP streamer
+	client.connMutex.Lock()
+	client.connected = true
+	client.connMutex.Unlock()
+	client.startPCAPStreamer()
+
+	// Send PCAP data
+	testData := []byte{0xd4, 0xc3, 0xb2, 0xa1, 0x02, 0x00, 0x04, 0x00}
+
+	err := client.SendPCAPChunk(testData)
+	if err != nil {
+		t.Fatalf("Failed to send PCAP chunk: %v", err)
+	}
+
+	// Wait for data to be received by server
+	select {
+	case <-dataReceived:
+		// Data was received
+	case <-time.After(2 * time.Second):
+		t.Fatal("Timeout waiting for PCAP data to be sent to Hub")
+	}
+
+	// Verify the data
+	if len(receivedData) != len(testData) {
+		t.Errorf("Expected data length %d, got %d", len(testData), len(receivedData))
+	}
+
+	for i := range testData {
+		if receivedData[i] != testData[i] {
+			t.Errorf("Data mismatch at byte %d: expected 0x%02x, got 0x%02x", i, testData[i], receivedData[i])
+			break
+		}
+	}
+}
+
+// TestSendPCAPChunk_XAgentIDHeaderSet tests that X-Agent-ID header is set when sending PCAP data
+func TestSendPCAPChunk_XAgentIDHeaderSet(t *testing.T) {
+	var receivedAgentID string
+	headerReceived := make(chan bool, 1)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/health":
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"status":    "healthy",
+				"sessionId": "test-session",
+				"bpfFilter": "",
+			})
+		case "/api/agents":
+			w.WriteHeader(http.StatusOK)
+		case "/api/pcap/upload":
+			if r.Method == "POST" {
+				receivedAgentID = r.Header.Get("X-Agent-ID")
+				headerReceived <- true
+			}
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	client := createClientForTestServer(t, server.URL)
+	client.ctx, client.cancel = context.WithCancel(context.Background())
+	defer client.Close()
+
+	client.connMutex.Lock()
+	client.connected = true
+	client.connMutex.Unlock()
+	client.startPCAPStreamer()
+
+	err := client.SendPCAPChunk([]byte{0x01, 0x02, 0x03})
+	if err != nil {
+		t.Fatalf("Failed to send PCAP chunk: %v", err)
+	}
+
+	select {
+	case <-headerReceived:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Timeout waiting for PCAP data to be sent to Hub")
+	}
+
+	// Verify X-Agent-ID header matches agent info
+	expectedAgentID := client.agentInfo.ID
+	if receivedAgentID != expectedAgentID {
+		t.Errorf("Expected X-Agent-ID '%s', got '%s'", expectedAgentID, receivedAgentID)
+	}
+}
+
+// TestSendPCAPChunk_PostMethodUsed tests that POST method is used for /api/pcap/upload
+func TestSendPCAPChunk_PostMethodUsed(t *testing.T) {
+	methodUsed := ""
+	methodReceived := make(chan bool, 1)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/health":
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"status":    "healthy",
+				"sessionId": "test-session",
+				"bpfFilter": "",
+			})
+		case "/api/agents":
+			w.WriteHeader(http.StatusOK)
+		case "/api/pcap/upload":
+			methodUsed = r.Method
+			methodReceived <- true
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	client := createClientForTestServer(t, server.URL)
+	client.ctx, client.cancel = context.WithCancel(context.Background())
+	defer client.Close()
+
+	client.connMutex.Lock()
+	client.connected = true
+	client.connMutex.Unlock()
+	client.startPCAPStreamer()
+
+	err := client.SendPCAPChunk([]byte{0x01, 0x02})
+	if err != nil {
+		t.Fatalf("Failed to send PCAP chunk: %v", err)
+	}
+
+	select {
+	case <-methodReceived:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Timeout waiting for PCAP data to be sent to Hub")
+	}
+
+	if methodUsed != "POST" {
+		t.Errorf("Expected POST method, got '%s'", methodUsed)
+	}
+}
+
+// TestSendPCAPChunk_EmptyData tests that empty PCAP data can be queued
+func TestSendPCAPChunk_EmptyData(t *testing.T) {
+	agentInfo := createTestAgentInfo()
+	client := NewHubClient("hub:9090", agentInfo)
+	defer client.Close()
+
+	err := client.SendPCAPChunk([]byte{})
+	if err != nil {
+		t.Errorf("Expected nil error for empty data, got: %v", err)
+	}
+
+	// Verify empty data is in channel
+	select {
+	case received := <-client.pcapChan:
+		if len(received) != 0 {
+			t.Errorf("Expected empty slice, got %d bytes", len(received))
+		}
+	default:
+		t.Error("Expected empty data to be in channel, but channel was empty")
+	}
+}
