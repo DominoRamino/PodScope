@@ -3,6 +3,7 @@ package hub
 import (
 	"bytes"
 	"encoding/binary"
+	"os"
 	"testing"
 	"time"
 )
@@ -540,5 +541,425 @@ func TestWritePCAPPacket_NoError(t *testing.T) {
 	err := WritePCAPPacket(&buf, data, timestamp)
 	if err != nil {
 		t.Errorf("WritePCAPPacket() returned unexpected error: %v", err)
+	}
+}
+
+// ===== PCAPBuffer Write() Tests =====
+
+// TestWrite_CreatesAgentFile tests that Write() creates a new agent-specific PCAP file
+func TestWrite_CreatesAgentFile(t *testing.T) {
+	dir := t.TempDir()
+	pb := NewPCAPBuffer(dir, 1024*1024)
+	defer pb.Close()
+
+	// Write some packet data (not a PCAP header)
+	packetData := []byte("packet data here")
+	err := pb.Write("agent-001", packetData)
+	if err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+
+	// Verify the file was created
+	filePath := dir + "/agent-agent-001.pcap"
+	info, err := os.Stat(filePath)
+	if err != nil {
+		t.Fatalf("file not created: %v", err)
+	}
+
+	// File should contain PCAP header (24 bytes) + packet data
+	expectedSize := int64(24 + len(packetData))
+	if info.Size() != expectedSize {
+		t.Errorf("file size = %d, want %d", info.Size(), expectedSize)
+	}
+}
+
+// TestWrite_FileHasPCAPHeader tests that new files start with PCAP global header
+func TestWrite_FileHasPCAPHeader(t *testing.T) {
+	dir := t.TempDir()
+	pb := NewPCAPBuffer(dir, 1024*1024)
+	defer pb.Close()
+
+	packetData := []byte("test packet")
+	err := pb.Write("agent-002", packetData)
+	if err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+
+	// Read the file
+	filePath := dir + "/agent-agent-002.pcap"
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+
+	if len(data) < 24 {
+		t.Fatalf("file too short: got %d bytes, want at least 24", len(data))
+	}
+
+	// Verify PCAP magic number at start
+	magic := binary.LittleEndian.Uint32(data[0:4])
+	if magic != 0xa1b2c3d4 {
+		t.Errorf("PCAP magic = 0x%08x, want 0xa1b2c3d4", magic)
+	}
+
+	// Verify version 2.4
+	major := binary.LittleEndian.Uint16(data[4:6])
+	minor := binary.LittleEndian.Uint16(data[6:8])
+	if major != 2 || minor != 4 {
+		t.Errorf("PCAP version = %d.%d, want 2.4", major, minor)
+	}
+}
+
+// TestWrite_AppendsWithoutDuplicateHeader tests subsequent writes append packets without new header
+func TestWrite_AppendsWithoutDuplicateHeader(t *testing.T) {
+	dir := t.TempDir()
+	pb := NewPCAPBuffer(dir, 1024*1024)
+	defer pb.Close()
+
+	packet1 := []byte("first packet")
+	packet2 := []byte("second packet")
+
+	// Write first packet - creates file with header
+	err := pb.Write("agent-003", packet1)
+	if err != nil {
+		t.Fatalf("Write() first error = %v", err)
+	}
+
+	// Write second packet - should append without new header
+	err = pb.Write("agent-003", packet2)
+	if err != nil {
+		t.Fatalf("Write() second error = %v", err)
+	}
+
+	// Read the file
+	filePath := dir + "/agent-agent-003.pcap"
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+
+	// Should have: header(24) + packet1 + packet2
+	expectedSize := 24 + len(packet1) + len(packet2)
+	if len(data) != expectedSize {
+		t.Errorf("file size = %d, want %d", len(data), expectedSize)
+	}
+
+	// Verify only ONE PCAP header (check for magic at start, not in data section)
+	// The header is only at bytes 0-23
+	magic := binary.LittleEndian.Uint32(data[0:4])
+	if magic != 0xa1b2c3d4 {
+		t.Errorf("PCAP magic = 0x%08x, want 0xa1b2c3d4", magic)
+	}
+
+	// Verify both packets are in the file
+	if !bytes.Contains(data[24:], packet1) {
+		t.Error("file does not contain packet1")
+	}
+	if !bytes.Contains(data[24:], packet2) {
+		t.Error("file does not contain packet2")
+	}
+}
+
+// TestWrite_StripsIncomingPCAPHeader tests that incoming data with PCAP header is stripped
+func TestWrite_StripsIncomingPCAPHeader(t *testing.T) {
+	dir := t.TempDir()
+	pb := NewPCAPBuffer(dir, 1024*1024)
+	defer pb.Close()
+
+	// Create data with a PCAP header prefix (little-endian magic)
+	pcapHeader := []byte{
+		0xd4, 0xc3, 0xb2, 0xa1, // magic (little-endian)
+		0x02, 0x00, 0x04, 0x00, // version 2.4
+		0x00, 0x00, 0x00, 0x00, // timezone
+		0x00, 0x00, 0x00, 0x00, // sigfigs
+		0xff, 0xff, 0x00, 0x00, // snaplen 65535
+		0x01, 0x00, 0x00, 0x00, // network (ethernet)
+	}
+	packetData := []byte("actual packet data")
+	dataWithHeader := append(pcapHeader, packetData...)
+
+	err := pb.Write("agent-004", dataWithHeader)
+	if err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+
+	// Read the file
+	filePath := dir + "/agent-agent-004.pcap"
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+
+	// Should have: our header(24) + packetData (without the duplicate header)
+	expectedSize := 24 + len(packetData)
+	if len(data) != expectedSize {
+		t.Errorf("file size = %d, want %d (incoming header should be stripped)", len(data), expectedSize)
+	}
+}
+
+// TestWrite_MultipleAgents tests that separate files are created for each agent
+func TestWrite_MultipleAgents(t *testing.T) {
+	dir := t.TempDir()
+	pb := NewPCAPBuffer(dir, 1024*1024)
+	defer pb.Close()
+
+	// Write data from two different agents
+	err := pb.Write("agent-a", []byte("agent a data"))
+	if err != nil {
+		t.Fatalf("Write() agent-a error = %v", err)
+	}
+
+	err = pb.Write("agent-b", []byte("agent b data"))
+	if err != nil {
+		t.Fatalf("Write() agent-b error = %v", err)
+	}
+
+	// Verify two separate files exist
+	_, err = os.Stat(dir + "/agent-agent-a.pcap")
+	if err != nil {
+		t.Errorf("agent-a file not found: %v", err)
+	}
+
+	_, err = os.Stat(dir + "/agent-agent-b.pcap")
+	if err != nil {
+		t.Errorf("agent-b file not found: %v", err)
+	}
+}
+
+// TestWrite_UpdatesTotalSize tests that totalSize is correctly updated
+func TestWrite_UpdatesTotalSize(t *testing.T) {
+	dir := t.TempDir()
+	pb := NewPCAPBuffer(dir, 1024*1024)
+	defer pb.Close()
+
+	// Initially size should be 0
+	if pb.Size() != 0 {
+		t.Errorf("initial size = %d, want 0", pb.Size())
+	}
+
+	// Write some data
+	packet1 := []byte("packet one data")
+	err := pb.Write("agent-005", packet1)
+	if err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+
+	// Size() returns totalSize which tracks packet data written (not file size with headers)
+	// The implementation only adds the data bytes to totalSize, not the PCAP header
+	expectedSize := int64(len(packet1))
+	if pb.Size() != expectedSize {
+		t.Errorf("size after first write = %d, want %d", pb.Size(), expectedSize)
+	}
+
+	// Write more data
+	packet2 := []byte("packet two")
+	err = pb.Write("agent-005", packet2)
+	if err != nil {
+		t.Fatalf("Write() second error = %v", err)
+	}
+
+	// Size should now include both packets (data only, no headers)
+	expectedSize = int64(len(packet1) + len(packet2))
+	if pb.Size() != expectedSize {
+		t.Errorf("size after second write = %d, want %d", pb.Size(), expectedSize)
+	}
+}
+
+// ===== PCAPBuffer GetSessionPCAP() Tests =====
+
+// TestGetSessionPCAP_EmptyBuffer tests GetSessionPCAP with no data
+func TestGetSessionPCAP_EmptyBuffer(t *testing.T) {
+	dir := t.TempDir()
+	pb := NewPCAPBuffer(dir, 1024*1024)
+	defer pb.Close()
+
+	data, err := pb.GetSessionPCAP()
+	if err != nil {
+		t.Fatalf("GetSessionPCAP() error = %v", err)
+	}
+
+	// Should return just the global header (24 bytes)
+	if len(data) != 24 {
+		t.Errorf("empty buffer PCAP size = %d, want 24", len(data))
+	}
+
+	// Verify magic number
+	magic := binary.LittleEndian.Uint32(data[0:4])
+	if magic != 0xa1b2c3d4 {
+		t.Errorf("magic = 0x%08x, want 0xa1b2c3d4", magic)
+	}
+}
+
+// TestGetSessionPCAP_SingleAgent tests merging with single agent
+func TestGetSessionPCAP_SingleAgent(t *testing.T) {
+	dir := t.TempDir()
+	pb := NewPCAPBuffer(dir, 1024*1024)
+	defer pb.Close()
+
+	packetData := []byte("single agent packet")
+	err := pb.Write("agent-single", packetData)
+	if err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+
+	merged, err := pb.GetSessionPCAP()
+	if err != nil {
+		t.Fatalf("GetSessionPCAP() error = %v", err)
+	}
+
+	// Should have: header(24) + packetData
+	expectedSize := 24 + len(packetData)
+	if len(merged) != expectedSize {
+		t.Errorf("merged size = %d, want %d", len(merged), expectedSize)
+	}
+
+	// Verify header
+	magic := binary.LittleEndian.Uint32(merged[0:4])
+	if magic != 0xa1b2c3d4 {
+		t.Errorf("magic = 0x%08x, want 0xa1b2c3d4", magic)
+	}
+
+	// Verify packet data is present
+	if !bytes.Equal(merged[24:], packetData) {
+		t.Errorf("packet data mismatch")
+	}
+}
+
+// TestGetSessionPCAP_MergesMultipleAgents tests merging files from multiple agents
+func TestGetSessionPCAP_MergesMultipleAgents(t *testing.T) {
+	dir := t.TempDir()
+	pb := NewPCAPBuffer(dir, 1024*1024)
+	defer pb.Close()
+
+	packet1 := []byte("agent1-packet")
+	packet2 := []byte("agent2-packet")
+
+	err := pb.Write("agent-1", packet1)
+	if err != nil {
+		t.Fatalf("Write() agent-1 error = %v", err)
+	}
+
+	err = pb.Write("agent-2", packet2)
+	if err != nil {
+		t.Fatalf("Write() agent-2 error = %v", err)
+	}
+
+	merged, err := pb.GetSessionPCAP()
+	if err != nil {
+		t.Fatalf("GetSessionPCAP() error = %v", err)
+	}
+
+	// Should have: header(24) + packet1 + packet2
+	expectedSize := 24 + len(packet1) + len(packet2)
+	if len(merged) != expectedSize {
+		t.Errorf("merged size = %d, want %d", len(merged), expectedSize)
+	}
+
+	// Verify single header
+	magic := binary.LittleEndian.Uint32(merged[0:4])
+	if magic != 0xa1b2c3d4 {
+		t.Errorf("magic = 0x%08x, want 0xa1b2c3d4", magic)
+	}
+
+	// Verify both packets are in the merged data
+	if !bytes.Contains(merged[24:], packet1) {
+		t.Error("merged data does not contain packet1")
+	}
+	if !bytes.Contains(merged[24:], packet2) {
+		t.Error("merged data does not contain packet2")
+	}
+}
+
+// TestGetSessionPCAP_SingleGlobalHeader tests that merged output has only one global header
+func TestGetSessionPCAP_SingleGlobalHeader(t *testing.T) {
+	dir := t.TempDir()
+	pb := NewPCAPBuffer(dir, 1024*1024)
+	defer pb.Close()
+
+	// Write to 3 different agents
+	err := pb.Write("agent-x", []byte("packet-x"))
+	if err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	err = pb.Write("agent-y", []byte("packet-y"))
+	if err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	err = pb.Write("agent-z", []byte("packet-z"))
+	if err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+
+	merged, err := pb.GetSessionPCAP()
+	if err != nil {
+		t.Fatalf("GetSessionPCAP() error = %v", err)
+	}
+
+	// Count occurrences of PCAP magic number (little-endian: d4 c3 b2 a1)
+	magicLE := []byte{0xd4, 0xc3, 0xb2, 0xa1}
+	count := bytes.Count(merged, magicLE)
+
+	// Should have exactly one magic number (at the beginning)
+	if count != 1 {
+		t.Errorf("magic number count = %d, want 1 (should be single global header)", count)
+	}
+
+	// Verify magic is at position 0
+	if !bytes.HasPrefix(merged, magicLE) {
+		t.Error("merged data does not start with PCAP magic number")
+	}
+}
+
+// TestGetSessionPCAP_SkipsPerAgentHeaders tests that per-agent headers (bytes 0-23) are skipped
+func TestGetSessionPCAP_SkipsPerAgentHeaders(t *testing.T) {
+	dir := t.TempDir()
+	pb := NewPCAPBuffer(dir, 1024*1024)
+	defer pb.Close()
+
+	// Each agent file has 24-byte header + data
+	// The merged output should skip these per-agent headers
+	packet1 := []byte("PACKET_ONE__")  // 12 bytes
+	packet2 := []byte("PACKET_TWO__")  // 12 bytes
+
+	err := pb.Write("agent-p", packet1)
+	if err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	err = pb.Write("agent-q", packet2)
+	if err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+
+	// Verify agent files have headers
+	data1, _ := os.ReadFile(dir + "/agent-agent-p.pcap")
+	data2, _ := os.ReadFile(dir + "/agent-agent-q.pcap")
+
+	if len(data1) != 24+len(packet1) {
+		t.Errorf("agent-p file size = %d, want %d", len(data1), 24+len(packet1))
+	}
+	if len(data2) != 24+len(packet2) {
+		t.Errorf("agent-q file size = %d, want %d", len(data2), 24+len(packet2))
+	}
+
+	// Get merged PCAP
+	merged, err := pb.GetSessionPCAP()
+	if err != nil {
+		t.Fatalf("GetSessionPCAP() error = %v", err)
+	}
+
+	// Merged should have: global header (24) + packet1 data + packet2 data
+	// NOT: global header (24) + agent1 header (24) + packet1 + agent2 header (24) + packet2
+	expectedSize := 24 + len(packet1) + len(packet2)
+	if len(merged) != expectedSize {
+		t.Errorf("merged size = %d, want %d (per-agent headers should be skipped)", len(merged), expectedSize)
+	}
+
+	// Verify packets are present without their original headers
+	mergedContent := merged[24:] // skip global header
+	if !bytes.Contains(mergedContent, packet1) {
+		t.Error("merged data missing packet1")
+	}
+	if !bytes.Contains(mergedContent, packet2) {
+		t.Error("merged data missing packet2")
 	}
 }
