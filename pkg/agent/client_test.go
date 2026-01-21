@@ -1,7 +1,10 @@
 package agent
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -471,5 +474,316 @@ func TestConnect_HealthCheckConnectionRefused_ReturnsError(t *testing.T) {
 	// Verify client is not connected
 	if client.IsConnected() {
 		t.Error("Expected IsConnected() to return false when connection fails")
+	}
+}
+
+// Helper to create a test flow
+func createTestFlow(id string) *protocol.Flow {
+	return &protocol.Flow{
+		ID:       id,
+		SrcIP:    "10.0.0.1",
+		DstIP:    "10.0.0.2",
+		SrcPort:  12345,
+		DstPort:  80,
+		Protocol: "HTTP",
+		Status:   "closed",
+	}
+}
+
+// TestSendFlow_AddedToChannelWhenSpaceAvailable tests that flow is queued when channel has space
+func TestSendFlow_AddedToChannelWhenSpaceAvailable(t *testing.T) {
+	agentInfo := createTestAgentInfo()
+	client := NewHubClient("hub:9090", agentInfo)
+	defer client.Close()
+
+	flow := createTestFlow("flow-001")
+
+	err := client.SendFlow(flow)
+	if err != nil {
+		t.Errorf("Expected nil error when channel has space, got: %v", err)
+	}
+
+	// Verify flow is in channel
+	select {
+	case received := <-client.flowChan:
+		if received.ID != flow.ID {
+			t.Errorf("Expected flow ID '%s', got '%s'", flow.ID, received.ID)
+		}
+	default:
+		t.Error("Expected flow to be in channel, but channel was empty")
+	}
+}
+
+// TestSendFlow_ReturnsNilOnSuccess tests that SendFlow returns nil on successful queue
+func TestSendFlow_ReturnsNilOnSuccess(t *testing.T) {
+	agentInfo := createTestAgentInfo()
+	client := NewHubClient("hub:9090", agentInfo)
+	defer client.Close()
+
+	flow := createTestFlow("flow-002")
+
+	err := client.SendFlow(flow)
+	if err != nil {
+		t.Errorf("Expected SendFlow to return nil, got: %v", err)
+	}
+}
+
+// TestSendFlow_MultipleFlowsQueued tests that multiple flows can be queued
+func TestSendFlow_MultipleFlowsQueued(t *testing.T) {
+	agentInfo := createTestAgentInfo()
+	client := NewHubClient("hub:9090", agentInfo)
+	defer client.Close()
+
+	// Queue multiple flows
+	for i := 0; i < 10; i++ {
+		flow := createTestFlow(fmt.Sprintf("flow-%03d", i))
+		err := client.SendFlow(flow)
+		if err != nil {
+			t.Errorf("Expected nil error for flow %d, got: %v", i, err)
+		}
+	}
+
+	// Verify channel has 10 flows
+	if len(client.flowChan) != 10 {
+		t.Errorf("Expected 10 flows in channel, got %d", len(client.flowChan))
+	}
+}
+
+// TestSendFlow_ChannelFullReturnsError tests that error is returned when channel is full
+func TestSendFlow_ChannelFullReturnsError(t *testing.T) {
+	// Create a client with small channel capacity for testing
+	agentInfo := createTestAgentInfo()
+	client := &HubClient{
+		hubURL:    "http://hub:8080",
+		agentInfo: agentInfo,
+		client: &http.Client{
+			Timeout: 10 * time.Second,
+		},
+		flowChan:    make(chan *protocol.Flow, 2), // Small capacity
+		pcapChan:    make(chan []byte, 100),
+		maxFailures: 3,
+	}
+	client.ctx, client.cancel = context.WithCancel(context.Background())
+	defer client.Close()
+
+	// Fill the channel
+	client.SendFlow(createTestFlow("flow-001"))
+	client.SendFlow(createTestFlow("flow-002"))
+
+	// Third flow should return error
+	err := client.SendFlow(createTestFlow("flow-003"))
+	if err == nil {
+		t.Error("Expected error when channel is full, got nil")
+	}
+
+	if !strings.Contains(err.Error(), "channel full") {
+		t.Errorf("Expected 'channel full' error message, got: %v", err)
+	}
+}
+
+// TestSendFlow_FlowSentToHubViaHTTP tests that queued flow is sent to Hub via POST /api/flows
+func TestSendFlow_FlowSentToHubViaHTTP(t *testing.T) {
+	var receivedFlow protocol.Flow
+	flowReceived := make(chan bool, 1)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/health":
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"status":    "healthy",
+				"sessionId": "test-session",
+				"bpfFilter": "",
+			})
+		case "/api/agents":
+			w.WriteHeader(http.StatusOK)
+		case "/api/flows":
+			if r.Method == "POST" {
+				json.NewDecoder(r.Body).Decode(&receivedFlow)
+				flowReceived <- true
+			}
+			w.WriteHeader(http.StatusCreated)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	client := createClientForTestServer(t, server.URL)
+	client.ctx, client.cancel = context.WithCancel(context.Background())
+	defer client.Close()
+
+	// Mark as connected and start the flow streamer
+	client.connMutex.Lock()
+	client.connected = true
+	client.connMutex.Unlock()
+	client.startFlowStreamer()
+
+	// Send a flow
+	flow := &protocol.Flow{
+		ID:       "test-flow-http",
+		SrcIP:    "192.168.1.10",
+		DstIP:    "10.0.0.5",
+		SrcPort:  45678,
+		DstPort:  80,
+		Protocol: "HTTP",
+		Status:   "closed",
+	}
+
+	err := client.SendFlow(flow)
+	if err != nil {
+		t.Fatalf("Failed to send flow: %v", err)
+	}
+
+	// Wait for flow to be received by server
+	select {
+	case <-flowReceived:
+		// Flow was received
+	case <-time.After(2 * time.Second):
+		t.Fatal("Timeout waiting for flow to be sent to Hub")
+	}
+
+	// Verify the flow data
+	if receivedFlow.ID != flow.ID {
+		t.Errorf("Expected flow ID '%s', got '%s'", flow.ID, receivedFlow.ID)
+	}
+	if receivedFlow.SrcIP != flow.SrcIP {
+		t.Errorf("Expected SrcIP '%s', got '%s'", flow.SrcIP, receivedFlow.SrcIP)
+	}
+	if receivedFlow.DstIP != flow.DstIP {
+		t.Errorf("Expected DstIP '%s', got '%s'", flow.DstIP, receivedFlow.DstIP)
+	}
+	if receivedFlow.SrcPort != flow.SrcPort {
+		t.Errorf("Expected SrcPort %d, got %d", flow.SrcPort, receivedFlow.SrcPort)
+	}
+	if receivedFlow.DstPort != flow.DstPort {
+		t.Errorf("Expected DstPort %d, got %d", flow.DstPort, receivedFlow.DstPort)
+	}
+	if receivedFlow.Protocol != flow.Protocol {
+		t.Errorf("Expected Protocol '%s', got '%s'", flow.Protocol, receivedFlow.Protocol)
+	}
+}
+
+// TestSendFlow_JSONCorrectlyFormatted tests that flow is sent with correct JSON formatting
+func TestSendFlow_JSONCorrectlyFormatted(t *testing.T) {
+	var receivedBody []byte
+	bodyReceived := make(chan bool, 1)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/health":
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"status":    "healthy",
+				"sessionId": "test-session",
+				"bpfFilter": "",
+			})
+		case "/api/agents":
+			w.WriteHeader(http.StatusOK)
+		case "/api/flows":
+			if r.Method == "POST" {
+				buf := new(bytes.Buffer)
+				buf.ReadFrom(r.Body)
+				receivedBody = buf.Bytes()
+				bodyReceived <- true
+			}
+			w.WriteHeader(http.StatusCreated)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	client := createClientForTestServer(t, server.URL)
+	client.ctx, client.cancel = context.WithCancel(context.Background())
+	defer client.Close()
+
+	client.connMutex.Lock()
+	client.connected = true
+	client.connMutex.Unlock()
+	client.startFlowStreamer()
+
+	flow := &protocol.Flow{
+		ID:       "json-test-flow",
+		SrcIP:    "10.0.0.1",
+		DstIP:    "10.0.0.2",
+		SrcPort:  1234,
+		DstPort:  443,
+		Protocol: "HTTPS",
+		Status:   "closed",
+	}
+
+	err := client.SendFlow(flow)
+	if err != nil {
+		t.Fatalf("Failed to send flow: %v", err)
+	}
+
+	select {
+	case <-bodyReceived:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Timeout waiting for flow to be sent to Hub")
+	}
+
+	// Verify JSON is valid
+	var parsedFlow protocol.Flow
+	err = json.Unmarshal(receivedBody, &parsedFlow)
+	if err != nil {
+		t.Errorf("Received body is not valid JSON: %v", err)
+	}
+
+	// Verify key fields
+	if parsedFlow.ID != "json-test-flow" {
+		t.Errorf("Expected ID 'json-test-flow', got '%s'", parsedFlow.ID)
+	}
+}
+
+// TestSendFlow_PostMethodUsed tests that POST method is used for /api/flows
+func TestSendFlow_PostMethodUsed(t *testing.T) {
+	methodUsed := ""
+	methodReceived := make(chan bool, 1)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/health":
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"status":    "healthy",
+				"sessionId": "test-session",
+				"bpfFilter": "",
+			})
+		case "/api/agents":
+			w.WriteHeader(http.StatusOK)
+		case "/api/flows":
+			methodUsed = r.Method
+			methodReceived <- true
+			w.WriteHeader(http.StatusCreated)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	client := createClientForTestServer(t, server.URL)
+	client.ctx, client.cancel = context.WithCancel(context.Background())
+	defer client.Close()
+
+	client.connMutex.Lock()
+	client.connected = true
+	client.connMutex.Unlock()
+	client.startFlowStreamer()
+
+	err := client.SendFlow(createTestFlow("method-test"))
+	if err != nil {
+		t.Fatalf("Failed to send flow: %v", err)
+	}
+
+	select {
+	case <-methodReceived:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Timeout waiting for flow to be sent to Hub")
+	}
+
+	if methodUsed != "POST" {
+		t.Errorf("Expected POST method, got '%s'", methodUsed)
 	}
 }
