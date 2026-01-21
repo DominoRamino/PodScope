@@ -276,3 +276,255 @@ func TestAdd_MultipleEvictions(t *testing.T) {
 		}
 	}
 }
+
+// Tests for US-003: FlowRingBuffer retrieval methods
+
+func TestGetAll_EmptyBuffer(t *testing.T) {
+	rb := NewFlowRingBuffer(10)
+
+	flows := rb.GetAll()
+
+	if flows == nil {
+		t.Error("expected GetAll() to return non-nil slice, got nil")
+	}
+	if len(flows) != 0 {
+		t.Errorf("expected empty slice for empty buffer, got %d flows", len(flows))
+	}
+}
+
+func TestGetAll_ChronologicalOrder(t *testing.T) {
+	rb := NewFlowRingBuffer(10)
+
+	// Add flows in order
+	flow1 := createTestFlow("flow-1")
+	flow2 := createTestFlow("flow-2")
+	flow3 := createTestFlow("flow-3")
+
+	rb.Add(flow1) // Oldest
+	rb.Add(flow2)
+	rb.Add(flow3) // Newest
+
+	flows := rb.GetAll()
+
+	if len(flows) != 3 {
+		t.Fatalf("expected 3 flows, got %d", len(flows))
+	}
+
+	// Oldest first
+	if flows[0].ID != "flow-1" {
+		t.Errorf("expected first flow to be flow-1 (oldest), got %s", flows[0].ID)
+	}
+	if flows[1].ID != "flow-2" {
+		t.Errorf("expected second flow to be flow-2, got %s", flows[1].ID)
+	}
+	if flows[2].ID != "flow-3" {
+		t.Errorf("expected third flow to be flow-3 (newest), got %s", flows[2].ID)
+	}
+}
+
+func TestGetAll_OrderAfterWrapAround(t *testing.T) {
+	// Use small capacity to force wrap-around
+	capacity := 3
+	rb := NewFlowRingBuffer(capacity)
+
+	// Add 5 flows to a capacity-3 buffer, causing wrap-around
+	rb.Add(createTestFlow("flow-1")) // Evicted
+	rb.Add(createTestFlow("flow-2")) // Evicted
+	rb.Add(createTestFlow("flow-3")) // Oldest remaining
+	rb.Add(createTestFlow("flow-4"))
+	rb.Add(createTestFlow("flow-5")) // Newest
+
+	flows := rb.GetAll()
+
+	if len(flows) != 3 {
+		t.Fatalf("expected 3 flows after eviction, got %d", len(flows))
+	}
+
+	// Should be in chronological order: flow-3 (oldest), flow-4, flow-5 (newest)
+	expectedOrder := []string{"flow-3", "flow-4", "flow-5"}
+	for i, expected := range expectedOrder {
+		if flows[i].ID != expected {
+			t.Errorf("position %d: expected %s, got %s", i, expected, flows[i].ID)
+		}
+	}
+}
+
+func TestGetAll_OrderAfterMultipleWrapArounds(t *testing.T) {
+	capacity := 3
+	rb := NewFlowRingBuffer(capacity)
+
+	// Add 10 flows to force multiple complete wrap-arounds
+	for i := 1; i <= 10; i++ {
+		rb.Add(createTestFlow(string(rune('0'+i)) + "-flow"))
+	}
+
+	flows := rb.GetAll()
+
+	if len(flows) != 3 {
+		t.Fatalf("expected 3 flows, got %d", len(flows))
+	}
+
+	// Last 3 flows added were 8, 9, 10 - should be in chronological order
+	expectedOrder := []string{"8-flow", "9-flow", ":-flow"} // ':' is rune 58 = '0'+10
+	for i, expected := range expectedOrder {
+		if flows[i].ID != expected {
+			t.Errorf("position %d: expected %s, got %s", i, expected, flows[i].ID)
+		}
+	}
+}
+
+func TestGetRecent_NewestFirstOrdering(t *testing.T) {
+	rb := NewFlowRingBuffer(10)
+
+	rb.Add(createTestFlow("flow-1")) // Oldest
+	rb.Add(createTestFlow("flow-2"))
+	rb.Add(createTestFlow("flow-3")) // Newest
+
+	// Get 2 most recent
+	flows := rb.GetRecent(2)
+
+	if len(flows) != 2 {
+		t.Fatalf("expected 2 flows, got %d", len(flows))
+	}
+
+	// Newest first
+	if flows[0].ID != "flow-3" {
+		t.Errorf("expected first to be flow-3 (newest), got %s", flows[0].ID)
+	}
+	if flows[1].ID != "flow-2" {
+		t.Errorf("expected second to be flow-2, got %s", flows[1].ID)
+	}
+}
+
+func TestGetRecent_EmptyBuffer(t *testing.T) {
+	rb := NewFlowRingBuffer(10)
+
+	flows := rb.GetRecent(5)
+
+	if flows == nil {
+		t.Error("expected GetRecent() to return non-nil slice, got nil")
+	}
+	if len(flows) != 0 {
+		t.Errorf("expected empty slice for empty buffer, got %d flows", len(flows))
+	}
+}
+
+func TestGetRecent_RequestMoreThanSize(t *testing.T) {
+	rb := NewFlowRingBuffer(10)
+
+	rb.Add(createTestFlow("flow-1"))
+	rb.Add(createTestFlow("flow-2"))
+
+	// Request 100 when only 2 exist
+	flows := rb.GetRecent(100)
+
+	if len(flows) != 2 {
+		t.Errorf("expected 2 flows (all available), got %d", len(flows))
+	}
+
+	// Should still be newest first
+	if flows[0].ID != "flow-2" {
+		t.Errorf("expected first to be flow-2 (newest), got %s", flows[0].ID)
+	}
+	if flows[1].ID != "flow-1" {
+		t.Errorf("expected second to be flow-1 (oldest), got %s", flows[1].ID)
+	}
+}
+
+func TestGetRecent_AfterWrapAround(t *testing.T) {
+	capacity := 3
+	rb := NewFlowRingBuffer(capacity)
+
+	// Add 5 flows to force wrap-around
+	rb.Add(createTestFlow("flow-1")) // Evicted
+	rb.Add(createTestFlow("flow-2")) // Evicted
+	rb.Add(createTestFlow("flow-3"))
+	rb.Add(createTestFlow("flow-4"))
+	rb.Add(createTestFlow("flow-5")) // Newest
+
+	flows := rb.GetRecent(2)
+
+	if len(flows) != 2 {
+		t.Fatalf("expected 2 flows, got %d", len(flows))
+	}
+
+	// Newest first: flow-5, then flow-4
+	if flows[0].ID != "flow-5" {
+		t.Errorf("expected first to be flow-5 (newest), got %s", flows[0].ID)
+	}
+	if flows[1].ID != "flow-4" {
+		t.Errorf("expected second to be flow-4, got %s", flows[1].ID)
+	}
+}
+
+func TestGet_ExistingFlow(t *testing.T) {
+	rb := NewFlowRingBuffer(10)
+
+	original := createTestFlow("target-flow")
+	original.BytesSent = 999
+	original.SrcIP = "192.168.1.100"
+
+	rb.Add(createTestFlow("other-1"))
+	rb.Add(original)
+	rb.Add(createTestFlow("other-2"))
+
+	retrieved := rb.Get("target-flow")
+
+	if retrieved == nil {
+		t.Fatal("expected to retrieve flow, got nil")
+	}
+	if retrieved.ID != "target-flow" {
+		t.Errorf("expected ID 'target-flow', got %s", retrieved.ID)
+	}
+	if retrieved.BytesSent != 999 {
+		t.Errorf("expected BytesSent 999, got %d", retrieved.BytesSent)
+	}
+	if retrieved.SrcIP != "192.168.1.100" {
+		t.Errorf("expected SrcIP '192.168.1.100', got %s", retrieved.SrcIP)
+	}
+}
+
+func TestGet_NonExistingFlow(t *testing.T) {
+	rb := NewFlowRingBuffer(10)
+
+	rb.Add(createTestFlow("flow-1"))
+	rb.Add(createTestFlow("flow-2"))
+
+	retrieved := rb.Get("nonexistent-flow")
+
+	if retrieved != nil {
+		t.Errorf("expected nil for non-existent flow, got %+v", retrieved)
+	}
+}
+
+func TestGet_EmptyBuffer(t *testing.T) {
+	rb := NewFlowRingBuffer(10)
+
+	retrieved := rb.Get("any-id")
+
+	if retrieved != nil {
+		t.Errorf("expected nil for empty buffer, got %+v", retrieved)
+	}
+}
+
+func TestGet_AfterEviction(t *testing.T) {
+	capacity := 2
+	rb := NewFlowRingBuffer(capacity)
+
+	rb.Add(createTestFlow("flow-1")) // Will be evicted
+	rb.Add(createTestFlow("flow-2"))
+	rb.Add(createTestFlow("flow-3")) // Evicts flow-1
+
+	// flow-1 should no longer be retrievable
+	if rb.Get("flow-1") != nil {
+		t.Error("expected evicted flow to return nil")
+	}
+
+	// flow-2 and flow-3 should still be retrievable
+	if rb.Get("flow-2") == nil {
+		t.Error("expected flow-2 to be retrievable")
+	}
+	if rb.Get("flow-3") == nil {
+		t.Error("expected flow-3 to be retrievable")
+	}
+}
