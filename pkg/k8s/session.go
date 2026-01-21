@@ -144,7 +144,7 @@ func (s *Session) deployHub(ctx context.Context) error {
 	// Create ClusterRole with permissions for terminal exec
 	clusterRole := &rbacv1.ClusterRole{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: fmt.Sprintf("podscope-hub-%s", s.id),
+			Name:   fmt.Sprintf("podscope-hub-%s", s.id),
 			Labels: labels,
 		},
 		Rules: []rbacv1.PolicyRule{
@@ -168,7 +168,7 @@ func (s *Session) deployHub(ctx context.Context) error {
 	// Create ClusterRoleBinding
 	clusterRoleBinding := &rbacv1.ClusterRoleBinding{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: fmt.Sprintf("podscope-hub-%s", s.id),
+			Name:   fmt.Sprintf("podscope-hub-%s", s.id),
 			Labels: labels,
 		},
 		RoleRef: rbacv1.RoleRef{
@@ -375,16 +375,7 @@ func (s *Session) InjectAgent(ctx context.Context, target PodTarget, privileged 
 			Image:           GetAgentImage(),
 			ImagePullPolicy: corev1.PullIfNotPresent,
 			SecurityContext: securityContext,
-			Resources: corev1.ResourceRequirements{
-				Requests: corev1.ResourceList{
-					corev1.ResourceCPU:    resource.MustParse("50m"),
-					corev1.ResourceMemory: resource.MustParse("64Mi"),
-				},
-				Limits: corev1.ResourceList{
-					corev1.ResourceCPU:    resource.MustParse("200m"),
-					corev1.ResourceMemory: resource.MustParse("256Mi"),
-				},
-			},
+			// Note: Resource limits cannot be set on ephemeral containers (Kubernetes limitation)
 			Env: []corev1.EnvVar{
 				{
 					Name:  "HUB_ADDRESS",
