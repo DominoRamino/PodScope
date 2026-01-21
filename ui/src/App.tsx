@@ -132,8 +132,8 @@ function App() {
       if (!isHTTPPort && !isHTTPProtocol) return false
     }
 
-    // DNS filtering
-    if (!filterOptions.showDNS) {
+    // DNS filtering (skip if showAllPorts is enabled)
+    if (!filterOptions.showAllPorts && !filterOptions.showDNS) {
       const isDNS = flow.srcPort === DNS_PORT || flow.dstPort === DNS_PORT
       if (isDNS) return false
     }

@@ -1,11 +1,17 @@
 # Binaries
 bin/
+podscope
+podscope-linux
 *.exe
 *.exe~
 *.dll
 *.so
 *.dylib
-
+*.devcontainer
+*.dockerignore
+# Video files
+*.mp4
+/scripts/ralph/
 # Test binary
 *.test
 
@@ -36,6 +42,7 @@ ui/.vite/
 
 # Build artifacts
 *.log
+BUILD_NUMBER
 
 # Local env files
 .env

@@ -1,4 +1,4 @@
-.PHONY: all build build-agent build-hub build-cli load clean help version inspect use-tag
+.PHONY: all build build-agent build-hub build-cli build-cli-linux load clean help version inspect use-tag setup-cluster dev dev-quick dev-ui load-agent load-hub restart-test-pods
 
 # Default target
 all: build-cli build load
@@ -8,15 +8,14 @@ export DOCKER_BUILDKIT=1
 
 # Version and build info
 VERSION := $(shell cat VERSION 2>/dev/null || echo "dev")
-BUILD_NUMBER := $(shell cat BUILD_NUMBER 2>/dev/null || echo "1")
 BUILD_DATE := $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 GIT_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
-IMAGE_TAG := v$(BUILD_NUMBER)
+IMAGE_TAG := $(GIT_COMMIT)
 
 help:
 	@echo "PodScope Build Targets:"
 	@echo "  make build-cli   - Build the podscope CLI binary"
-	@echo "  make build       - Build both agent and hub images (with version tag v$(BUILD_NUMBER))"
+	@echo "  make build       - Build both agent and hub images (tagged with git commit)"
 	@echo "  make build-agent - Build only agent image"
 	@echo "  make build-hub   - Build only hub image"
 	@echo "  make load        - Load images into minikube"
@@ -24,22 +23,35 @@ help:
 	@echo "  make clean       - Remove built images and binary"
 	@echo "  make rebuild     - Clean and rebuild everything"
 	@echo ""
+	@echo "Development Workflow:"
+	@echo "  make dev              - Full dev loop: build, load, run (one command!)"
+	@echo "  make dev-quick        - Smart rebuild: only rebuild changed components"
+	@echo "  make dev-ui           - UI-only development with Vite hot-reload"
+	@echo "  make setup-cluster    - Ensure minikube running with podinfo test workload"
+	@echo "  make restart-test-pods - Restart podinfo pods to clear ephemeral containers"
+	@echo ""
 	@echo "Version Management:"
-	@echo "  make version     - Show current build number and version info"
-	@echo "  make increment   - Increment build number (do this before rebuilding)"
+	@echo "  make version     - Show current version info"
 	@echo "  make inspect     - Inspect image labels"
 
-# Build the CLI binary
+# Build the CLI binary (Windows)
 build-cli:
 	@echo "Building podscope CLI..."
 	@echo "  Version: $(VERSION)"
-	@echo "  Build: $(BUILD_NUMBER)"
-	@echo "  Default Image Tag: $(IMAGE_TAG)"
+	@echo "  Commit: $(GIT_COMMIT)"
 	@go build -ldflags "-X github.com/podscope/podscope/pkg/cli.Version=$(VERSION) -X github.com/podscope/podscope/pkg/k8s.DefaultImageTag=$(IMAGE_TAG)" -o podscope ./cmd/podscope
 	@echo "✓ CLI built successfully: ./podscope"
 	@echo ""
 	@echo "Usage: ./podscope tap -n <namespace> --pod <pod-name>"
 	@echo "Will use images: podscope-agent:$(IMAGE_TAG) and podscope:$(IMAGE_TAG)"
+
+# Build the CLI binary for Linux (to run in WSL)
+build-cli-linux:
+	@echo "Building podscope CLI (Linux)..."
+	@echo "  Version: $(VERSION)"
+	@echo "  Commit: $(GIT_COMMIT)"
+	@GOOS=linux GOARCH=amd64 go build -ldflags "-X github.com/podscope/podscope/pkg/cli.Version=$(VERSION) -X github.com/podscope/podscope/pkg/k8s.DefaultImageTag=$(IMAGE_TAG)" -o podscope-linux ./cmd/podscope
+	@echo "✓ CLI built successfully: ./podscope-linux"
 
 # Build both images in parallel
 build:
@@ -72,26 +84,17 @@ build-hub:
 		.
 	@echo "✓ Hub image built: podscope:$(IMAGE_TAG)"
 
-# Load images into minikube
+# Load images into minikube (via WSL)
 load:
 	@echo "Loading images into minikube..."
-	@minikube image load podscope-agent:$(IMAGE_TAG)
-	@minikube image load podscope:$(IMAGE_TAG)
+	@wsl minikube image load podscope-agent:$(IMAGE_TAG)
+	@wsl minikube image load podscope:$(IMAGE_TAG)
 	@echo "✓ Images loaded into minikube:"
 	@echo "    podscope-agent:$(IMAGE_TAG)"
 	@echo "    podscope:$(IMAGE_TAG)"
 
-# Increment build number
-increment:
-	@echo "Current build: $(BUILD_NUMBER)"
-	@echo $$(($(BUILD_NUMBER) + 1)) > BUILD_NUMBER
-	@echo "New build number: $$(cat BUILD_NUMBER)"
-	@echo ""
-	@echo "Next build will be tagged as: v$$(cat BUILD_NUMBER)"
-
 # Show current version info
 version:
-	@echo "Build Number: $(BUILD_NUMBER)"
 	@echo "Image Tag: $(IMAGE_TAG)"
 	@echo "Version: $(VERSION)"
 	@echo "Commit: $(GIT_COMMIT)"
@@ -119,3 +122,56 @@ rebuild: clean all
 # Quick rebuild (for iterative development)
 quick: build
 	@echo "✓ Quick build complete. Run 'make load' to load into minikube."
+
+# =============================================================================
+# Development Workflow Targets
+# =============================================================================
+
+# Ensure cluster is ready with test workloads
+setup-cluster:
+	@wsl bash ./scripts/setup-cluster.sh
+
+# Full development loop: build everything, load, run
+dev:
+	@$(MAKE) setup-cluster build-cli-linux build load restart-test-pods
+	@echo ""
+	@echo "Starting PodScope session..."
+	@wsl ./podscope-linux tap -n default -l app.kubernetes.io/name=podinfo --ui-port 8899
+
+# Smart rebuild: only rebuild changed components
+dev-quick: setup-cluster build-cli-linux
+	@echo "Checking for changes..."
+	@if ! git diff --quiet HEAD -- cmd/agent pkg/agent; then \
+		echo "Agent changed, rebuilding..."; \
+		$(MAKE) build-agent load-agent; \
+	else \
+		echo "Agent unchanged, skipping."; \
+	fi
+	@if ! git diff --quiet HEAD -- cmd/hub pkg/hub ui; then \
+		echo "Hub changed, rebuilding..."; \
+		$(MAKE) build-hub load-hub; \
+	else \
+		echo "Hub unchanged, skipping."; \
+	fi
+	@$(MAKE) restart-test-pods
+	@echo ""
+	@echo "Starting PodScope session..."
+	@wsl ./podscope-linux tap -n default -l app.kubernetes.io/name=podinfo --ui-port 8899
+
+# UI-only development (Vite hot-reload)
+dev-ui:
+	@cd ui && npm run dev
+
+# Individual image loading (via WSL)
+load-agent:
+	@wsl minikube image load podscope-agent:$(IMAGE_TAG)
+
+load-hub:
+	@wsl minikube image load podscope:$(IMAGE_TAG)
+
+# Clean up ephemeral containers by restarting test pods (via WSL)
+restart-test-pods:
+	@echo "Restarting podinfo pods to clear ephemeral containers..."
+	@wsl kubectl delete pods -l app.kubernetes.io/name=podinfo -n default
+	@wsl kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=podinfo -n default --timeout=60s
+	@echo "✓ Test pods restarted"

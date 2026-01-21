@@ -12,6 +12,66 @@ PodScope Shark is a Kubernetes network traffic capture and analysis tool. It use
 - **Protocols**: gRPC for agent-hub communication (HTTP fallback), WebSocket for UI real-time updates
 - **Container**: Docker multi-stage builds for Hub and Agent images
 
+## Quick Start: Development Workflow
+
+**IMPORTANT**: This project uses minikube running in WSL. Use these one-command workflows for testing:
+
+### One-Command Development (Recommended)
+
+```bash
+# Full development loop - builds everything, loads images, restarts test pods, runs capture
+make dev
+```
+
+This single command:
+1. Increments build version
+2. Ensures minikube is running with podinfo test workload
+3. Builds Linux CLI binary (for WSL compatibility)
+4. Builds Hub and Agent Docker images
+5. Loads images into minikube
+6. Restarts podinfo pods (clears old ephemeral containers)
+7. Starts PodScope capture session
+8. Opens UI (port will be shown in output)
+
+### Quick Iteration
+
+```bash
+# Smart rebuild - only rebuilds changed components
+make dev-quick
+```
+
+Uses git diff to detect changes:
+- Only rebuilds Agent image if `cmd/agent` or `pkg/agent` changed
+- Only rebuilds Hub image if `cmd/hub`, `pkg/hub`, or `ui` changed
+- Always rebuilds CLI (fast)
+- Always restarts test pods before capture
+
+### UI-Only Development
+
+```bash
+# Terminal 1: Run capture session
+make dev
+
+# Terminal 2: Vite hot-reload for UI changes
+make dev-ui
+```
+
+### Other Useful Commands
+
+```bash
+make restart-test-pods    # Clear ephemeral containers from previous sessions
+make setup-cluster        # Ensure minikube + podinfo are ready
+make help                 # Show all available targets
+```
+
+### Environment Notes
+
+- **Minikube runs in WSL** - all kubectl/minikube commands use `wsl` prefix
+- **CLI is cross-compiled for Linux** - `podscope-linux` binary runs in WSL
+- **Test workload**: podinfo deployment with label `app.kubernetes.io/name=podinfo`
+
+---
+
 ## Build and Development Commands
 
 ### Go Backend
