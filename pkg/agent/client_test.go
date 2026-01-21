@@ -1084,3 +1084,264 @@ func TestSendPCAPChunk_EmptyData(t *testing.T) {
 		t.Error("Expected empty data to be in channel, but channel was empty")
 	}
 }
+
+// TestIsConnected_InitiallyFalse tests that IsConnected() returns false initially
+func TestIsConnected_InitiallyFalse(t *testing.T) {
+	agentInfo := createTestAgentInfo()
+	client := NewHubClient("hub:9090", agentInfo)
+	defer client.Close()
+
+	if client.IsConnected() {
+		t.Error("Expected IsConnected() to return false initially")
+	}
+}
+
+// TestIsConnected_TrueAfterConnectedSet tests that IsConnected() returns true after connected is set
+func TestIsConnected_TrueAfterConnectedSet(t *testing.T) {
+	agentInfo := createTestAgentInfo()
+	client := NewHubClient("hub:9090", agentInfo)
+	defer client.Close()
+
+	// Manually set connected state
+	client.connMutex.Lock()
+	client.connected = true
+	client.connMutex.Unlock()
+
+	if !client.IsConnected() {
+		t.Error("Expected IsConnected() to return true after setting connected")
+	}
+}
+
+// TestIsConnected_FalseAfterDisconnected tests that IsConnected() returns false after disconnection
+func TestIsConnected_FalseAfterDisconnected(t *testing.T) {
+	agentInfo := createTestAgentInfo()
+	client := NewHubClient("hub:9090", agentInfo)
+	defer client.Close()
+
+	// First connect then disconnect
+	client.connMutex.Lock()
+	client.connected = true
+	client.connMutex.Unlock()
+
+	// Verify connected
+	if !client.IsConnected() {
+		t.Error("Expected IsConnected() to return true after setting connected")
+	}
+
+	// Disconnect
+	client.connMutex.Lock()
+	client.connected = false
+	client.connMutex.Unlock()
+
+	// Verify disconnected
+	if client.IsConnected() {
+		t.Error("Expected IsConnected() to return false after setting disconnected")
+	}
+}
+
+// TestIsConnected_ReturnsCurrentState tests that IsConnected() accurately reflects current state
+func TestIsConnected_ReturnsCurrentState(t *testing.T) {
+	agentInfo := createTestAgentInfo()
+	client := NewHubClient("hub:9090", agentInfo)
+	defer client.Close()
+
+	// Test multiple state transitions
+	states := []bool{false, true, false, true, true, false}
+
+	for i, expected := range states {
+		client.connMutex.Lock()
+		client.connected = expected
+		client.connMutex.Unlock()
+
+		if client.IsConnected() != expected {
+			t.Errorf("State %d: Expected IsConnected() to return %v, got %v", i, expected, client.IsConnected())
+		}
+	}
+}
+
+// TestIsConnected_ThreadSafe tests that IsConnected() is safe for concurrent access
+func TestIsConnected_ThreadSafe(t *testing.T) {
+	agentInfo := createTestAgentInfo()
+	client := NewHubClient("hub:9090", agentInfo)
+	defer client.Close()
+
+	done := make(chan bool)
+
+	// Start multiple goroutines reading state
+	for i := 0; i < 10; i++ {
+		go func() {
+			for j := 0; j < 100; j++ {
+				_ = client.IsConnected()
+			}
+			done <- true
+		}()
+	}
+
+	// Toggle state in main goroutine
+	for i := 0; i < 50; i++ {
+		client.connMutex.Lock()
+		client.connected = !client.connected
+		client.connMutex.Unlock()
+	}
+
+	// Wait for all reader goroutines
+	for i := 0; i < 10; i++ {
+		<-done
+	}
+
+	// If we got here without race conditions, test passes
+}
+
+// TestClose_SetsConnectedToFalse tests that Close() sets connected to false
+func TestClose_SetsConnectedToFalse(t *testing.T) {
+	agentInfo := createTestAgentInfo()
+	client := NewHubClient("hub:9090", agentInfo)
+
+	// First connect
+	client.connMutex.Lock()
+	client.connected = true
+	client.connMutex.Unlock()
+
+	// Verify connected
+	if !client.IsConnected() {
+		t.Error("Expected IsConnected() to return true before Close()")
+	}
+
+	// Close
+	err := client.Close()
+	if err != nil {
+		t.Errorf("Expected Close() to return nil, got: %v", err)
+	}
+
+	// Verify disconnected
+	if client.IsConnected() {
+		t.Error("Expected IsConnected() to return false after Close()")
+	}
+}
+
+// TestClose_ReturnsNil tests that Close() returns nil
+func TestClose_ReturnsNil(t *testing.T) {
+	agentInfo := createTestAgentInfo()
+	client := NewHubClient("hub:9090", agentInfo)
+
+	err := client.Close()
+	if err != nil {
+		t.Errorf("Expected Close() to return nil, got: %v", err)
+	}
+}
+
+// TestClose_CancelsContext tests that Close() cancels the context
+func TestClose_CancelsContext(t *testing.T) {
+	agentInfo := createTestAgentInfo()
+	client := NewHubClient("hub:9090", agentInfo)
+
+	// Verify context is not cancelled initially
+	select {
+	case <-client.ctx.Done():
+		t.Error("Expected context to not be cancelled initially")
+	default:
+		// Expected
+	}
+
+	// Close
+	client.Close()
+
+	// Verify context is cancelled
+	select {
+	case <-client.ctx.Done():
+		// Expected - context is cancelled
+	default:
+		t.Error("Expected context to be cancelled after Close()")
+	}
+}
+
+// TestClose_CanBeCalledMultipleTimes tests that Close() can be called multiple times safely
+func TestClose_CanBeCalledMultipleTimes(t *testing.T) {
+	agentInfo := createTestAgentInfo()
+	client := NewHubClient("hub:9090", agentInfo)
+
+	// First close
+	err := client.Close()
+	if err != nil {
+		t.Errorf("Expected first Close() to return nil, got: %v", err)
+	}
+
+	// Second close - should not panic
+	err = client.Close()
+	if err != nil {
+		t.Errorf("Expected second Close() to return nil, got: %v", err)
+	}
+
+	// Verify still disconnected
+	if client.IsConnected() {
+		t.Error("Expected IsConnected() to return false after multiple Close() calls")
+	}
+}
+
+// TestClose_WaitsForStreamersToFinish tests that Close() waits for goroutines to finish
+func TestClose_WaitsForStreamersToFinish(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/health":
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"status":    "healthy",
+				"sessionId": "test-session",
+				"bpfFilter": "",
+			})
+		case "/api/agents":
+			w.WriteHeader(http.StatusOK)
+		case "/api/flows":
+			w.WriteHeader(http.StatusCreated)
+		case "/api/pcap/upload":
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	client := createClientForTestServer(t, server.URL)
+	client.ctx, client.cancel = context.WithCancel(context.Background())
+
+	// Mark as connected and start streamers
+	client.connMutex.Lock()
+	client.connected = true
+	client.connMutex.Unlock()
+	client.startFlowStreamer()
+	client.startPCAPStreamer()
+
+	// Queue some data
+	client.SendFlow(createTestFlow("test-flow"))
+	client.SendPCAPChunk([]byte{0x01, 0x02, 0x03})
+
+	// Give streamers time to start processing
+	time.Sleep(50 * time.Millisecond)
+
+	// Close should wait for streamers to finish
+	err := client.Close()
+	if err != nil {
+		t.Errorf("Expected Close() to return nil, got: %v", err)
+	}
+
+	// After Close(), streamers should be done
+	if client.IsConnected() {
+		t.Error("Expected IsConnected() to return false after Close()")
+	}
+}
+
+// TestClose_AfterNeverConnected tests that Close() works even if Connect() was never called
+func TestClose_AfterNeverConnected(t *testing.T) {
+	agentInfo := createTestAgentInfo()
+	client := NewHubClient("hub:9090", agentInfo)
+
+	// Never call Connect(), just Close()
+	err := client.Close()
+	if err != nil {
+		t.Errorf("Expected Close() to return nil, got: %v", err)
+	}
+
+	if client.IsConnected() {
+		t.Error("Expected IsConnected() to return false")
+	}
+}
