@@ -2,6 +2,8 @@ package agent
 
 import (
 	"testing"
+
+	"github.com/podscope/podscope/pkg/protocol"
 )
 
 // Test flowKey normalization - ensures bidirectional flows produce identical keys
@@ -228,5 +230,212 @@ func TestIsHTTPMethod_RejectsSimilarButInvalidMethod(t *testing.T) {
 	payload := []byte("GETTER /resource HTTP/1.1\r\n")
 	if isHTTPMethod(payload) {
 		t.Error("isHTTPMethod() should return false for invalid method 'GETTER'")
+	}
+}
+
+// Test detectProtocol - verifies correct identification of application protocols
+
+// Helper to create a minimal TCPAssembler for testing detectProtocol
+func newTestAssembler() *TCPAssembler {
+	return &TCPAssembler{
+		flows: make(map[string]*TCPFlow),
+	}
+}
+
+func TestDetectProtocol_TLSClientHello(t *testing.T) {
+	// TLS ClientHello starts with 0x16 (handshake) followed by 0x03 (TLS version prefix)
+	// Minimum 6 bytes needed for detection
+	assembler := newTestAssembler()
+
+	// TLS 1.0 ClientHello
+	payload := []byte{0x16, 0x03, 0x01, 0x00, 0x05, 0x01, 0x00, 0x00, 0x01, 0x00}
+	result := assembler.detectProtocol(payload, 8080)
+
+	if result != protocol.ProtocolTLS {
+		t.Errorf("detectProtocol() = %q, want %q for TLS ClientHello", result, protocol.ProtocolTLS)
+	}
+}
+
+func TestDetectProtocol_TLS12ClientHello(t *testing.T) {
+	// TLS 1.2 uses 0x03 0x03
+	assembler := newTestAssembler()
+
+	payload := []byte{0x16, 0x03, 0x03, 0x00, 0x05, 0x01, 0x00, 0x00, 0x01, 0x00}
+	result := assembler.detectProtocol(payload, 8080)
+
+	if result != protocol.ProtocolTLS {
+		t.Errorf("detectProtocol() = %q, want %q for TLS 1.2 ClientHello", result, protocol.ProtocolTLS)
+	}
+}
+
+func TestDetectProtocol_TLS11ClientHello(t *testing.T) {
+	// TLS 1.1 uses 0x03 0x02
+	assembler := newTestAssembler()
+
+	payload := []byte{0x16, 0x03, 0x02, 0x00, 0x05, 0x01, 0x00, 0x00, 0x01, 0x00}
+	result := assembler.detectProtocol(payload, 8080)
+
+	if result != protocol.ProtocolTLS {
+		t.Errorf("detectProtocol() = %q, want %q for TLS 1.1 ClientHello", result, protocol.ProtocolTLS)
+	}
+}
+
+func TestDetectProtocol_HTTPMethod_GET(t *testing.T) {
+	assembler := newTestAssembler()
+
+	payload := []byte("GET /api/health HTTP/1.1\r\nHost: example.com\r\n\r\n")
+	result := assembler.detectProtocol(payload, 8080)
+
+	if result != protocol.ProtocolHTTP {
+		t.Errorf("detectProtocol() = %q, want %q for HTTP GET", result, protocol.ProtocolHTTP)
+	}
+}
+
+func TestDetectProtocol_HTTPMethod_POST(t *testing.T) {
+	assembler := newTestAssembler()
+
+	payload := []byte("POST /api/users HTTP/1.1\r\nHost: example.com\r\nContent-Length: 0\r\n\r\n")
+	result := assembler.detectProtocol(payload, 8080)
+
+	if result != protocol.ProtocolHTTP {
+		t.Errorf("detectProtocol() = %q, want %q for HTTP POST", result, protocol.ProtocolHTTP)
+	}
+}
+
+func TestDetectProtocol_HTTPResponse(t *testing.T) {
+	assembler := newTestAssembler()
+
+	payload := []byte("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{}")
+	result := assembler.detectProtocol(payload, 8080)
+
+	if result != protocol.ProtocolHTTP {
+		t.Errorf("detectProtocol() = %q, want %q for HTTP response", result, protocol.ProtocolHTTP)
+	}
+}
+
+func TestDetectProtocol_Port443_ReturnsHTTPS(t *testing.T) {
+	// When port is 443 and payload is not clearly HTTP or TLS, return HTTPS
+	assembler := newTestAssembler()
+
+	// Binary data that doesn't match HTTP or TLS patterns
+	payload := []byte{0x00, 0x01, 0x02, 0x03, 0x04, 0x05}
+	result := assembler.detectProtocol(payload, 443)
+
+	if result != protocol.ProtocolHTTPS {
+		t.Errorf("detectProtocol() = %q, want %q for port 443", result, protocol.ProtocolHTTPS)
+	}
+}
+
+func TestDetectProtocol_Port8443_ReturnsHTTPS(t *testing.T) {
+	// Port 8443 is also a common HTTPS port
+	assembler := newTestAssembler()
+
+	payload := []byte{0x00, 0x01, 0x02, 0x03, 0x04, 0x05}
+	result := assembler.detectProtocol(payload, 8443)
+
+	if result != protocol.ProtocolHTTPS {
+		t.Errorf("detectProtocol() = %q, want %q for port 8443", result, protocol.ProtocolHTTPS)
+	}
+}
+
+func TestDetectProtocol_UnknownFallsBackToTCP(t *testing.T) {
+	// When payload doesn't match any pattern and port isn't HTTPS, return TCP
+	assembler := newTestAssembler()
+
+	// Binary data on a non-HTTPS port
+	payload := []byte{0x00, 0x01, 0x02, 0x03, 0x04, 0x05}
+	result := assembler.detectProtocol(payload, 8080)
+
+	if result != protocol.ProtocolTCP {
+		t.Errorf("detectProtocol() = %q, want %q for unknown protocol", result, protocol.ProtocolTCP)
+	}
+}
+
+func TestDetectProtocol_EmptyPayload_NonHTTPSPort(t *testing.T) {
+	// Empty payload on non-HTTPS port should return TCP
+	assembler := newTestAssembler()
+
+	payload := []byte{}
+	result := assembler.detectProtocol(payload, 8080)
+
+	if result != protocol.ProtocolTCP {
+		t.Errorf("detectProtocol() = %q, want %q for empty payload on non-HTTPS port", result, protocol.ProtocolTCP)
+	}
+}
+
+func TestDetectProtocol_EmptyPayload_HTTPSPort(t *testing.T) {
+	// Empty payload on port 443 should return HTTPS (port-based heuristic)
+	assembler := newTestAssembler()
+
+	payload := []byte{}
+	result := assembler.detectProtocol(payload, 443)
+
+	if result != protocol.ProtocolHTTPS {
+		t.Errorf("detectProtocol() = %q, want %q for empty payload on port 443", result, protocol.ProtocolHTTPS)
+	}
+}
+
+func TestDetectProtocol_TLSTakesPrecedenceOverPort(t *testing.T) {
+	// TLS detection should happen before port-based HTTPS detection
+	assembler := newTestAssembler()
+
+	// TLS ClientHello on port 443 - should return TLS, not HTTPS
+	payload := []byte{0x16, 0x03, 0x01, 0x00, 0x05, 0x01, 0x00, 0x00, 0x01, 0x00}
+	result := assembler.detectProtocol(payload, 443)
+
+	if result != protocol.ProtocolTLS {
+		t.Errorf("detectProtocol() = %q, want %q (TLS should take precedence over port 443)", result, protocol.ProtocolTLS)
+	}
+}
+
+func TestDetectProtocol_HTTPTakesPrecedenceOverPort(t *testing.T) {
+	// HTTP detection should happen before port-based HTTPS detection
+	assembler := newTestAssembler()
+
+	// HTTP request on port 443 - should return HTTP (even though unusual)
+	payload := []byte("GET /health HTTP/1.1\r\n")
+	result := assembler.detectProtocol(payload, 443)
+
+	if result != protocol.ProtocolHTTP {
+		t.Errorf("detectProtocol() = %q, want %q (HTTP should take precedence over port 443)", result, protocol.ProtocolHTTP)
+	}
+}
+
+func TestDetectProtocol_ShortTLSPayload_NotDetected(t *testing.T) {
+	// TLS detection requires > 5 bytes - short payloads shouldn't match
+	assembler := newTestAssembler()
+
+	// Only 5 bytes, not enough for TLS detection (needs > 5)
+	payload := []byte{0x16, 0x03, 0x01, 0x00, 0x05}
+	result := assembler.detectProtocol(payload, 8080)
+
+	// Should fall through to TCP since len(payload) == 5, not > 5
+	if result != protocol.ProtocolTCP {
+		t.Errorf("detectProtocol() = %q, want %q for short TLS-like payload", result, protocol.ProtocolTCP)
+	}
+}
+
+func TestDetectProtocol_RandomTextNotHTTP(t *testing.T) {
+	// Random text that doesn't start with HTTP method or response
+	assembler := newTestAssembler()
+
+	payload := []byte("Hello World, this is random text")
+	result := assembler.detectProtocol(payload, 8080)
+
+	if result != protocol.ProtocolTCP {
+		t.Errorf("detectProtocol() = %q, want %q for random text", result, protocol.ProtocolTCP)
+	}
+}
+
+func TestDetectProtocol_TLSRecord_NotHandshake(t *testing.T) {
+	// TLS record that's not a handshake (e.g., 0x17 = application data)
+	// Should not be detected as TLS by the ClientHello detection
+	assembler := newTestAssembler()
+
+	payload := []byte{0x17, 0x03, 0x03, 0x00, 0x05, 0x01, 0x02, 0x03, 0x04, 0x05}
+	result := assembler.detectProtocol(payload, 8080)
+
+	if result != protocol.ProtocolTCP {
+		t.Errorf("detectProtocol() = %q, want %q for non-handshake TLS record", result, protocol.ProtocolTCP)
 	}
 }
