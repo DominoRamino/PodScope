@@ -1292,3 +1292,296 @@ func TestHandlePCAPUpload_POST_EmptyBodyReturns200(t *testing.T) {
 		t.Errorf("status code = %d, want %d", w.Code, http.StatusOK)
 	}
 }
+
+// ============================================================================
+// TestHandleStats tests for GET /api/stats endpoint
+// ============================================================================
+
+// TestHandleStats_Returns200OK tests that the stats endpoint returns HTTP 200
+func TestHandleStats_Returns200OK(t *testing.T) {
+	s := setupTestServer(t)
+	defer s.pcapBuffer.Close()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/stats", nil)
+	w := httptest.NewRecorder()
+
+	s.handleStats(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status code = %d, want %d", w.Code, http.StatusOK)
+	}
+}
+
+// TestHandleStats_ReturnsJSONContentType tests that the response is JSON
+func TestHandleStats_ReturnsJSONContentType(t *testing.T) {
+	s := setupTestServer(t)
+	defer s.pcapBuffer.Close()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/stats", nil)
+	w := httptest.NewRecorder()
+
+	s.handleStats(w, req)
+
+	contentType := w.Header().Get("Content-Type")
+	if contentType != "application/json" {
+		t.Errorf("Content-Type = %q, want %q", contentType, "application/json")
+	}
+}
+
+// TestHandleStats_ReturnsFlowCount tests that the response includes flows (flowCount)
+func TestHandleStats_ReturnsFlowCount(t *testing.T) {
+	s := setupTestServer(t)
+	defer s.pcapBuffer.Close()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/stats", nil)
+	w := httptest.NewRecorder()
+
+	s.handleStats(w, req)
+
+	var resp map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	// Response should have 'flows' field (flowCount)
+	_, ok := resp["flows"]
+	if !ok {
+		t.Fatal("response missing 'flows' field")
+	}
+}
+
+// TestHandleStats_FlowCountReflectsStoredFlows tests that flows field reflects actual stored flows
+func TestHandleStats_FlowCountReflectsStoredFlows(t *testing.T) {
+	s := setupTestServer(t)
+	defer s.pcapBuffer.Close()
+
+	// Add some flows
+	flow1 := &protocol.Flow{ID: "flow-stats-1", SrcIP: "10.0.0.1", DstIP: "10.0.0.2"}
+	flow2 := &protocol.Flow{ID: "flow-stats-2", SrcIP: "10.0.0.3", DstIP: "10.0.0.4"}
+	flow3 := &protocol.Flow{ID: "flow-stats-3", SrcIP: "10.0.0.5", DstIP: "10.0.0.6"}
+	s.flowBuffer.Add(flow1)
+	s.flowBuffer.Add(flow2)
+	s.flowBuffer.Add(flow3)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/stats", nil)
+	w := httptest.NewRecorder()
+
+	s.handleStats(w, req)
+
+	var resp map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	flowCount, ok := resp["flows"].(float64)
+	if !ok {
+		t.Fatal("response 'flows' field not a number")
+	}
+	if int(flowCount) != 3 {
+		t.Errorf("flows = %d, want 3", int(flowCount))
+	}
+}
+
+// TestHandleStats_ReturnsPausedState tests that the response includes paused state
+func TestHandleStats_ReturnsPausedState(t *testing.T) {
+	s := setupTestServer(t)
+	defer s.pcapBuffer.Close()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/stats", nil)
+	w := httptest.NewRecorder()
+
+	s.handleStats(w, req)
+
+	var resp map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	// Response should have 'paused' field
+	_, ok := resp["paused"]
+	if !ok {
+		t.Fatal("response missing 'paused' field")
+	}
+}
+
+// TestHandleStats_PausedStateReflectsServerState tests that paused field reflects actual server state
+func TestHandleStats_PausedStateReflectsServerState(t *testing.T) {
+	s := setupTestServer(t)
+	defer s.pcapBuffer.Close()
+
+	// Set paused to true
+	s.pausedMutex.Lock()
+	s.paused = true
+	s.pausedMutex.Unlock()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/stats", nil)
+	w := httptest.NewRecorder()
+
+	s.handleStats(w, req)
+
+	var resp map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	paused, ok := resp["paused"].(bool)
+	if !ok {
+		t.Fatal("response 'paused' field not a boolean")
+	}
+	if paused != true {
+		t.Errorf("paused = %v, want true", paused)
+	}
+}
+
+// TestHandleStats_ReturnsPcapSize tests that the response includes pcapSize (bytes stored)
+func TestHandleStats_ReturnsPcapSize(t *testing.T) {
+	s := setupTestServer(t)
+	defer s.pcapBuffer.Close()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/stats", nil)
+	w := httptest.NewRecorder()
+
+	s.handleStats(w, req)
+
+	var resp map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	// Response should have 'pcapSize' field
+	_, ok := resp["pcapSize"]
+	if !ok {
+		t.Fatal("response missing 'pcapSize' field")
+	}
+}
+
+// TestHandleStats_PcapSizeReflectsStoredData tests that pcapSize reflects actual stored PCAP bytes
+func TestHandleStats_PcapSizeReflectsStoredData(t *testing.T) {
+	s := setupTestServer(t)
+	defer s.pcapBuffer.Close()
+
+	// Store some PCAP data (not paused, so it should be stored)
+	s.pausedMutex.Lock()
+	s.paused = false
+	s.pausedMutex.Unlock()
+
+	// Write some test data
+	pcapData := []byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A}
+	s.pcapBuffer.Write("test-agent", pcapData)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/stats", nil)
+	w := httptest.NewRecorder()
+
+	s.handleStats(w, req)
+
+	var resp map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	pcapSize, ok := resp["pcapSize"].(float64)
+	if !ok {
+		t.Fatal("response 'pcapSize' field not a number")
+	}
+	// pcapSize should be > 0 after storing data
+	if int(pcapSize) == 0 {
+		t.Error("pcapSize = 0, expected > 0 after storing data")
+	}
+}
+
+// TestHandleStats_ReturnsWsClients tests that the response includes wsClients count
+func TestHandleStats_ReturnsWsClients(t *testing.T) {
+	s := setupTestServer(t)
+	defer s.pcapBuffer.Close()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/stats", nil)
+	w := httptest.NewRecorder()
+
+	s.handleStats(w, req)
+
+	var resp map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	// Response should have 'wsClients' field
+	_, ok := resp["wsClients"]
+	if !ok {
+		t.Fatal("response missing 'wsClients' field")
+	}
+}
+
+// TestHandleStats_WsClientsCountAccurate tests that wsClients count reflects connected clients
+func TestHandleStats_WsClientsCountAccurate(t *testing.T) {
+	s := setupTestServer(t)
+	defer s.pcapBuffer.Close()
+
+	// Initially should be 0 clients
+	req := httptest.NewRequest(http.MethodGet, "/api/stats", nil)
+	w := httptest.NewRecorder()
+
+	s.handleStats(w, req)
+
+	var resp map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	wsClients, ok := resp["wsClients"].(float64)
+	if !ok {
+		t.Fatal("response 'wsClients' field not a number")
+	}
+	if int(wsClients) != 0 {
+		t.Errorf("wsClients = %d, want 0 initially", int(wsClients))
+	}
+}
+
+// TestHandleStats_ReturnsFlowCapacity tests that the response includes flowCapacity
+func TestHandleStats_ReturnsFlowCapacity(t *testing.T) {
+	s := setupTestServer(t)
+	defer s.pcapBuffer.Close()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/stats", nil)
+	w := httptest.NewRecorder()
+
+	s.handleStats(w, req)
+
+	var resp map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	// Response should have 'flowCapacity' field
+	flowCapacity, ok := resp["flowCapacity"].(float64)
+	if !ok {
+		t.Fatal("response missing 'flowCapacity' field or not a number")
+	}
+	// setupTestServer creates flowBuffer with capacity 100
+	if int(flowCapacity) != 100 {
+		t.Errorf("flowCapacity = %d, want 100", int(flowCapacity))
+	}
+}
+
+// TestHandleStats_ReturnsSessionId tests that the response includes sessionId
+func TestHandleStats_ReturnsSessionId(t *testing.T) {
+	s := setupTestServer(t)
+	defer s.pcapBuffer.Close()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/stats", nil)
+	w := httptest.NewRecorder()
+
+	s.handleStats(w, req)
+
+	var resp map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	sessionId, ok := resp["sessionId"].(string)
+	if !ok {
+		t.Fatal("response missing 'sessionId' field or not a string")
+	}
+	if sessionId != "test-session" {
+		t.Errorf("sessionId = %q, want %q", sessionId, "test-session")
+	}
+}
