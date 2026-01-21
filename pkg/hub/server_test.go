@@ -843,3 +843,253 @@ func TestHandlePause_PUT_Returns405(t *testing.T) {
 		t.Errorf("status code = %d, want %d", w.Code, http.StatusMethodNotAllowed)
 	}
 }
+
+// ============================================================================
+// TestHandleBPFFilter tests for /api/bpf-filter GET and POST endpoints
+// ============================================================================
+
+// TestHandleBPFFilter_GET_ReturnsEmptyFilterByDefault tests that GET returns empty filter when not set
+func TestHandleBPFFilter_GET_ReturnsEmptyFilterByDefault(t *testing.T) {
+	s := setupTestServer(t)
+	defer s.pcapBuffer.Close()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/bpf-filter", nil)
+	w := httptest.NewRecorder()
+
+	s.handleBPFFilter(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status code = %d, want %d", w.Code, http.StatusOK)
+	}
+
+	var resp map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	filter, ok := resp["filter"]
+	if !ok {
+		t.Fatal("response missing 'filter' field")
+	}
+	if filter != "" {
+		t.Errorf("filter = %q, want empty string", filter)
+	}
+}
+
+// TestHandleBPFFilter_GET_ReturnsJSONContentType tests that GET returns JSON content type
+func TestHandleBPFFilter_GET_ReturnsJSONContentType(t *testing.T) {
+	s := setupTestServer(t)
+	defer s.pcapBuffer.Close()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/bpf-filter", nil)
+	w := httptest.NewRecorder()
+
+	s.handleBPFFilter(w, req)
+
+	contentType := w.Header().Get("Content-Type")
+	if contentType != "application/json" {
+		t.Errorf("Content-Type = %q, want %q", contentType, "application/json")
+	}
+}
+
+// TestHandleBPFFilter_GET_ReturnsCurrentFilterAfterSet tests that GET returns the current filter after it's been set
+func TestHandleBPFFilter_GET_ReturnsCurrentFilterAfterSet(t *testing.T) {
+	s := setupTestServer(t)
+	defer s.pcapBuffer.Close()
+
+	// Set a BPF filter directly
+	s.bpfFilterMutex.Lock()
+	s.bpfFilter = "tcp port 80"
+	s.bpfFilterMutex.Unlock()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/bpf-filter", nil)
+	w := httptest.NewRecorder()
+
+	s.handleBPFFilter(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status code = %d, want %d", w.Code, http.StatusOK)
+	}
+
+	var resp map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	filter := resp["filter"]
+	if filter != "tcp port 80" {
+		t.Errorf("filter = %q, want %q", filter, "tcp port 80")
+	}
+}
+
+// TestHandleBPFFilter_POST_ValidFilterAccepted tests that POST with valid BPF syntax is accepted
+func TestHandleBPFFilter_POST_ValidFilterAccepted(t *testing.T) {
+	s := setupTestServer(t)
+	defer s.pcapBuffer.Close()
+
+	body := `{"filter": "tcp port 80"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/bpf-filter", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	s.handleBPFFilter(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status code = %d, want %d", w.Code, http.StatusOK)
+	}
+
+	var resp map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	success, ok := resp["success"].(bool)
+	if !ok || !success {
+		t.Errorf("response success = %v, want true", resp["success"])
+	}
+
+	// Verify the filter was stored
+	s.bpfFilterMutex.RLock()
+	storedFilter := s.bpfFilter
+	s.bpfFilterMutex.RUnlock()
+
+	if storedFilter != "tcp port 80" {
+		t.Errorf("stored filter = %q, want %q", storedFilter, "tcp port 80")
+	}
+}
+
+// TestHandleBPFFilter_POST_EmptyStringClearsFilter tests that POST with empty string clears the filter
+func TestHandleBPFFilter_POST_EmptyStringClearsFilter(t *testing.T) {
+	s := setupTestServer(t)
+	defer s.pcapBuffer.Close()
+
+	// Set an initial filter
+	s.bpfFilterMutex.Lock()
+	s.bpfFilter = "tcp port 443"
+	s.bpfFilterMutex.Unlock()
+
+	// Clear the filter with empty string
+	body := `{"filter": ""}`
+	req := httptest.NewRequest(http.MethodPost, "/api/bpf-filter", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	s.handleBPFFilter(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status code = %d, want %d", w.Code, http.StatusOK)
+	}
+
+	var resp map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	success, ok := resp["success"].(bool)
+	if !ok || !success {
+		t.Errorf("response success = %v, want true", resp["success"])
+	}
+
+	// Verify the filter was cleared
+	s.bpfFilterMutex.RLock()
+	storedFilter := s.bpfFilter
+	s.bpfFilterMutex.RUnlock()
+
+	if storedFilter != "" {
+		t.Errorf("stored filter = %q, want empty string", storedFilter)
+	}
+}
+
+// TestHandleBPFFilter_POST_ReturnsFilterInResponse tests that POST returns the filter in response
+func TestHandleBPFFilter_POST_ReturnsFilterInResponse(t *testing.T) {
+	s := setupTestServer(t)
+	defer s.pcapBuffer.Close()
+
+	body := `{"filter": "udp port 53"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/bpf-filter", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	s.handleBPFFilter(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status code = %d, want %d", w.Code, http.StatusOK)
+	}
+
+	var resp map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	filter, ok := resp["filter"].(string)
+	if !ok {
+		t.Fatal("response missing 'filter' field")
+	}
+	if filter != "udp port 53" {
+		t.Errorf("response filter = %q, want %q", filter, "udp port 53")
+	}
+}
+
+// TestHandleBPFFilter_POST_MissingFilterFieldReturns400 tests that POST without filter field returns 400
+func TestHandleBPFFilter_POST_MissingFilterFieldReturns400(t *testing.T) {
+	s := setupTestServer(t)
+	defer s.pcapBuffer.Close()
+
+	body := `{}`
+	req := httptest.NewRequest(http.MethodPost, "/api/bpf-filter", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	s.handleBPFFilter(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status code = %d, want %d", w.Code, http.StatusBadRequest)
+	}
+}
+
+// TestHandleBPFFilter_POST_InvalidJSONReturns400 tests that POST with invalid JSON returns 400
+func TestHandleBPFFilter_POST_InvalidJSONReturns400(t *testing.T) {
+	s := setupTestServer(t)
+	defer s.pcapBuffer.Close()
+
+	body := `{invalid json`
+	req := httptest.NewRequest(http.MethodPost, "/api/bpf-filter", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	s.handleBPFFilter(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status code = %d, want %d", w.Code, http.StatusBadRequest)
+	}
+}
+
+// TestHandleBPFFilter_DELETE_Returns405 tests that DELETE method returns 405 Method Not Allowed
+func TestHandleBPFFilter_DELETE_Returns405(t *testing.T) {
+	s := setupTestServer(t)
+	defer s.pcapBuffer.Close()
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/bpf-filter", nil)
+	w := httptest.NewRecorder()
+
+	s.handleBPFFilter(w, req)
+
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("status code = %d, want %d", w.Code, http.StatusMethodNotAllowed)
+	}
+}
+
+// TestHandleBPFFilter_PUT_Returns405 tests that PUT method returns 405 Method Not Allowed
+func TestHandleBPFFilter_PUT_Returns405(t *testing.T) {
+	s := setupTestServer(t)
+	defer s.pcapBuffer.Close()
+
+	req := httptest.NewRequest(http.MethodPut, "/api/bpf-filter", strings.NewReader(`{}`))
+	w := httptest.NewRecorder()
+
+	s.handleBPFFilter(w, req)
+
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("status code = %d, want %d", w.Code, http.StatusMethodNotAllowed)
+	}
+}
