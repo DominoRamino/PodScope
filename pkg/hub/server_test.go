@@ -530,3 +530,316 @@ func TestHandleFlows_GET_ReturnsCapacity(t *testing.T) {
 		t.Errorf("capacity = %d, want 100", int(capacity))
 	}
 }
+
+// ============================================================================
+// TestHandlePause tests for /api/pause GET and POST endpoints
+// ============================================================================
+
+// TestHandlePause_GET_ReturnsFalseInitially tests that GET returns paused: false when server starts
+func TestHandlePause_GET_ReturnsFalseInitially(t *testing.T) {
+	s := setupTestServer(t)
+	defer s.pcapBuffer.Close()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/pause", nil)
+	w := httptest.NewRecorder()
+
+	s.handlePause(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status code = %d, want %d", w.Code, http.StatusOK)
+	}
+
+	var resp map[string]bool
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	paused, ok := resp["paused"]
+	if !ok {
+		t.Fatal("response missing 'paused' field")
+	}
+	if paused != false {
+		t.Errorf("paused = %v, want false", paused)
+	}
+}
+
+// TestHandlePause_GET_ReturnsCurrentState tests that GET returns the current pause state
+func TestHandlePause_GET_ReturnsCurrentState(t *testing.T) {
+	s := setupTestServer(t)
+	defer s.pcapBuffer.Close()
+
+	// Set paused to true
+	s.pausedMutex.Lock()
+	s.paused = true
+	s.pausedMutex.Unlock()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/pause", nil)
+	w := httptest.NewRecorder()
+
+	s.handlePause(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status code = %d, want %d", w.Code, http.StatusOK)
+	}
+
+	var resp map[string]bool
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	paused, ok := resp["paused"]
+	if !ok {
+		t.Fatal("response missing 'paused' field")
+	}
+	if paused != true {
+		t.Errorf("paused = %v, want true", paused)
+	}
+}
+
+// TestHandlePause_GET_ReturnsJSONContentType tests that GET returns JSON content type
+func TestHandlePause_GET_ReturnsJSONContentType(t *testing.T) {
+	s := setupTestServer(t)
+	defer s.pcapBuffer.Close()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/pause", nil)
+	w := httptest.NewRecorder()
+
+	s.handlePause(w, req)
+
+	contentType := w.Header().Get("Content-Type")
+	if contentType != "application/json" {
+		t.Errorf("Content-Type = %q, want %q", contentType, "application/json")
+	}
+}
+
+// TestHandlePause_POST_SetPausedTrue tests that POST with paused: true sets pause to true
+func TestHandlePause_POST_SetPausedTrue(t *testing.T) {
+	s := setupTestServer(t)
+	defer s.pcapBuffer.Close()
+
+	// Ensure we start with paused = false
+	s.pausedMutex.Lock()
+	s.paused = false
+	s.pausedMutex.Unlock()
+
+	body := `{"paused": true}`
+	req := httptest.NewRequest(http.MethodPost, "/api/pause", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	s.handlePause(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status code = %d, want %d", w.Code, http.StatusOK)
+	}
+
+	var resp map[string]bool
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	paused, ok := resp["paused"]
+	if !ok {
+		t.Fatal("response missing 'paused' field")
+	}
+	if paused != true {
+		t.Errorf("response paused = %v, want true", paused)
+	}
+
+	// Verify internal state was updated
+	s.pausedMutex.RLock()
+	internalPaused := s.paused
+	s.pausedMutex.RUnlock()
+
+	if internalPaused != true {
+		t.Errorf("internal paused state = %v, want true", internalPaused)
+	}
+}
+
+// TestHandlePause_POST_SetPausedFalse tests that POST with paused: false sets pause to false
+func TestHandlePause_POST_SetPausedFalse(t *testing.T) {
+	s := setupTestServer(t)
+	defer s.pcapBuffer.Close()
+
+	// Start with paused = true
+	s.pausedMutex.Lock()
+	s.paused = true
+	s.pausedMutex.Unlock()
+
+	body := `{"paused": false}`
+	req := httptest.NewRequest(http.MethodPost, "/api/pause", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	s.handlePause(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status code = %d, want %d", w.Code, http.StatusOK)
+	}
+
+	var resp map[string]bool
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	paused, ok := resp["paused"]
+	if !ok {
+		t.Fatal("response missing 'paused' field")
+	}
+	if paused != false {
+		t.Errorf("response paused = %v, want false", paused)
+	}
+
+	// Verify internal state was updated
+	s.pausedMutex.RLock()
+	internalPaused := s.paused
+	s.pausedMutex.RUnlock()
+
+	if internalPaused != false {
+		t.Errorf("internal paused state = %v, want false", internalPaused)
+	}
+}
+
+// TestHandlePause_POST_EmptyBodyTogglesFromFalseToTrue tests that POST with empty body toggles pause from false to true
+func TestHandlePause_POST_EmptyBodyTogglesFromFalseToTrue(t *testing.T) {
+	s := setupTestServer(t)
+	defer s.pcapBuffer.Close()
+
+	// Start with paused = false
+	s.pausedMutex.Lock()
+	s.paused = false
+	s.pausedMutex.Unlock()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/pause", nil)
+	w := httptest.NewRecorder()
+
+	s.handlePause(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status code = %d, want %d", w.Code, http.StatusOK)
+	}
+
+	var resp map[string]bool
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	paused, ok := resp["paused"]
+	if !ok {
+		t.Fatal("response missing 'paused' field")
+	}
+	if paused != true {
+		t.Errorf("response paused = %v, want true (toggled from false)", paused)
+	}
+
+	// Verify internal state was toggled
+	s.pausedMutex.RLock()
+	internalPaused := s.paused
+	s.pausedMutex.RUnlock()
+
+	if internalPaused != true {
+		t.Errorf("internal paused state = %v, want true", internalPaused)
+	}
+}
+
+// TestHandlePause_POST_EmptyBodyTogglesFromTrueToFalse tests that POST with empty body toggles pause from true to false
+func TestHandlePause_POST_EmptyBodyTogglesFromTrueToFalse(t *testing.T) {
+	s := setupTestServer(t)
+	defer s.pcapBuffer.Close()
+
+	// Start with paused = true
+	s.pausedMutex.Lock()
+	s.paused = true
+	s.pausedMutex.Unlock()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/pause", nil)
+	w := httptest.NewRecorder()
+
+	s.handlePause(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status code = %d, want %d", w.Code, http.StatusOK)
+	}
+
+	var resp map[string]bool
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	paused, ok := resp["paused"]
+	if !ok {
+		t.Fatal("response missing 'paused' field")
+	}
+	if paused != false {
+		t.Errorf("response paused = %v, want false (toggled from true)", paused)
+	}
+
+	// Verify internal state was toggled
+	s.pausedMutex.RLock()
+	internalPaused := s.paused
+	s.pausedMutex.RUnlock()
+
+	if internalPaused != false {
+		t.Errorf("internal paused state = %v, want false", internalPaused)
+	}
+}
+
+// TestHandlePause_POST_MultipleToggles tests that consecutive toggles alternate the state
+func TestHandlePause_POST_MultipleToggles(t *testing.T) {
+	s := setupTestServer(t)
+	defer s.pcapBuffer.Close()
+
+	// Start with paused = false
+	s.pausedMutex.Lock()
+	s.paused = false
+	s.pausedMutex.Unlock()
+
+	expectedStates := []bool{true, false, true, false}
+
+	for i, expected := range expectedStates {
+		req := httptest.NewRequest(http.MethodPost, "/api/pause", nil)
+		w := httptest.NewRecorder()
+
+		s.handlePause(w, req)
+
+		var resp map[string]bool
+		if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+			t.Fatalf("toggle %d: failed to decode response: %v", i+1, err)
+		}
+
+		paused := resp["paused"]
+		if paused != expected {
+			t.Errorf("toggle %d: paused = %v, want %v", i+1, paused, expected)
+		}
+	}
+}
+
+// TestHandlePause_DELETE_Returns405 tests that DELETE method returns 405 Method Not Allowed
+func TestHandlePause_DELETE_Returns405(t *testing.T) {
+	s := setupTestServer(t)
+	defer s.pcapBuffer.Close()
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/pause", nil)
+	w := httptest.NewRecorder()
+
+	s.handlePause(w, req)
+
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("status code = %d, want %d", w.Code, http.StatusMethodNotAllowed)
+	}
+}
+
+// TestHandlePause_PUT_Returns405 tests that PUT method returns 405 Method Not Allowed
+func TestHandlePause_PUT_Returns405(t *testing.T) {
+	s := setupTestServer(t)
+	defer s.pcapBuffer.Close()
+
+	req := httptest.NewRequest(http.MethodPut, "/api/pause", strings.NewReader(`{}`))
+	w := httptest.NewRecorder()
+
+	s.handlePause(w, req)
+
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("status code = %d, want %d", w.Code, http.StatusMethodNotAllowed)
+	}
+}
