@@ -37,6 +37,11 @@ type HubClient struct {
 	capturer       *Capturer
 	lastBPFFilter  string
 	bpfFilterMutex sync.RWMutex
+
+	// Connection health tracking
+	consecutiveFailures int
+	maxFailures         int
+	onDisconnect        func() // Called when hub becomes unreachable
 }
 
 // NewHubClient creates a new Hub client
@@ -55,11 +60,17 @@ func NewHubClient(address string, agentInfo *protocol.AgentInfo) *HubClient {
 		client: &http.Client{
 			Timeout: 10 * time.Second,
 		},
-		ctx:      ctx,
-		cancel:   cancel,
-		flowChan: make(chan *protocol.Flow, 1000),
-		pcapChan: make(chan []byte, 100),
+		ctx:         ctx,
+		cancel:      cancel,
+		flowChan:    make(chan *protocol.Flow, 1000),
+		pcapChan:    make(chan []byte, 100),
+		maxFailures: 3, // Exit after 3 consecutive heartbeat failures (15 seconds)
 	}
+}
+
+// SetOnDisconnect sets the callback for when hub becomes unreachable
+func (c *HubClient) SetOnDisconnect(callback func()) {
+	c.onDisconnect = callback
 }
 
 // SetCapturer sets the capturer reference for BPF filter updates
@@ -247,10 +258,25 @@ func (c *HubClient) sendHeartbeat() {
 	// GET request as heartbeat - check for BPF filter updates
 	resp, err := c.client.Get(c.hubURL + "/api/health")
 	if err != nil {
-		log.Printf("Heartbeat failed: %v", err)
+		c.consecutiveFailures++
+		log.Printf("Heartbeat failed (%d/%d): %v", c.consecutiveFailures, c.maxFailures, err)
+
+		if c.consecutiveFailures >= c.maxFailures {
+			log.Printf("Hub unreachable after %d attempts, triggering shutdown", c.maxFailures)
+			c.connMutex.Lock()
+			c.connected = false
+			c.connMutex.Unlock()
+
+			if c.onDisconnect != nil {
+				c.onDisconnect()
+			}
+		}
 		return
 	}
 	defer resp.Body.Close()
+
+	// Reset failure counter on success
+	c.consecutiveFailures = 0
 
 	// Parse response to check for BPF filter updates
 	var healthResp struct {

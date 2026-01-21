@@ -1,5 +1,7 @@
 import { Flow, Protocol } from '../types'
 import { ArrowRight, Lock, Server } from 'lucide-react'
+import { useVirtualizer } from '@tanstack/react-virtual'
+import { useRef, memo } from 'react'
 
 interface FlowListProps {
   flows: Flow[]
@@ -8,10 +10,19 @@ interface FlowListProps {
 }
 
 export function FlowList({ flows, selectedId, onSelect }: FlowListProps) {
+  const parentRef = useRef<HTMLDivElement>(null)
+
+  const rowVirtualizer = useVirtualizer({
+    count: flows.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => 52, // Approximate row height in pixels
+    overscan: 10, // Render 10 extra rows outside viewport for smoother scrolling
+  })
+
   return (
     <div className="h-full flex flex-col">
       {/* Table Header */}
-      <div className="bg-slate-800 border-b border-slate-700 px-4 py-2 grid grid-cols-12 gap-2 text-xs font-medium text-slate-400 uppercase tracking-wider">
+      <div className="bg-slate-800 border-b border-slate-700 px-4 py-2 grid grid-cols-12 gap-2 text-xs font-medium text-slate-400 uppercase tracking-wider flex-shrink-0">
         <div className="col-span-2">Time</div>
         <div className="col-span-3">Source</div>
         <div className="col-span-3">Destination</div>
@@ -21,8 +32,11 @@ export function FlowList({ flows, selectedId, onSelect }: FlowListProps) {
         <div className="col-span-1">Size</div>
       </div>
 
-      {/* Flow Rows */}
-      <div className="flex-1 overflow-y-auto">
+      {/* Virtualized Flow Rows */}
+      <div
+        ref={parentRef}
+        className="flex-1 overflow-y-auto"
+      >
         {flows.length === 0 ? (
           <div className="flex items-center justify-center h-full text-slate-500">
             <div className="text-center">
@@ -32,14 +46,36 @@ export function FlowList({ flows, selectedId, onSelect }: FlowListProps) {
             </div>
           </div>
         ) : (
-          flows.map((flow) => (
-            <FlowRow
-              key={flow.id}
-              flow={flow}
-              selected={flow.id === selectedId}
-              onClick={() => onSelect(flow)}
-            />
-          ))
+          <div
+            style={{
+              height: `${rowVirtualizer.getTotalSize()}px`,
+              width: '100%',
+              position: 'relative',
+            }}
+          >
+            {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+              const flow = flows[virtualRow.index]
+              return (
+                <div
+                  key={flow.id}
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    width: '100%',
+                    height: `${virtualRow.size}px`,
+                    transform: `translateY(${virtualRow.start}px)`,
+                  }}
+                >
+                  <FlowRowMemo
+                    flow={flow}
+                    selected={flow.id === selectedId}
+                    onClick={() => onSelect(flow)}
+                  />
+                </div>
+              )
+            })}
+          </div>
         )}
       </div>
     </div>
@@ -52,7 +88,8 @@ interface FlowRowProps {
   onClick: () => void
 }
 
-function FlowRow({ flow, selected, onClick }: FlowRowProps) {
+// Memoized FlowRow to prevent unnecessary re-renders
+const FlowRowMemo = memo(function FlowRow({ flow, selected, onClick }: FlowRowProps) {
   const formatTime = (timestamp: string): string => {
     const date = new Date(timestamp)
     return date.toLocaleTimeString('en-US', {
@@ -135,7 +172,7 @@ function FlowRow({ flow, selected, onClick }: FlowRowProps) {
       onClick={onClick}
       className={`
         px-4 py-2 grid grid-cols-12 gap-2 text-sm cursor-pointer border-b border-slate-700/50
-        hover:bg-slate-800/50 transition-colors
+        hover:bg-slate-800/50 transition-colors h-full
         ${selected ? 'bg-podscope-900/30 border-l-2 border-l-podscope-500' : ''}
       `}
     >
@@ -191,4 +228,11 @@ function FlowRow({ flow, selected, onClick }: FlowRowProps) {
       </div>
     </div>
   )
-}
+}, (prev, next) => {
+  // Custom comparison for memoization
+  return prev.flow.id === next.flow.id &&
+         prev.flow.status === next.flow.status &&
+         prev.flow.bytesSent === next.flow.bytesSent &&
+         prev.flow.bytesReceived === next.flow.bytesReceived &&
+         prev.selected === next.selected
+})

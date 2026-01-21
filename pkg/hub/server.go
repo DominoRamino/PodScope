@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -31,14 +32,20 @@ type Server struct {
 	sessionID   string
 	pcapDir     string
 
-	// Flow storage
-	flows      []*protocol.Flow
-	flowsMutex sync.RWMutex
+	// Flow storage - bounded ring buffer
+	flowBuffer *FlowRingBuffer
 
 	// WebSocket clients
 	wsClients   map[*websocket.Conn]bool
 	wsMutex     sync.Mutex
 	wsUpgrader  websocket.Upgrader
+
+	// WebSocket batching
+	flowBatch     []*protocol.Flow
+	batchMutex    sync.Mutex
+	batchTicker   *time.Ticker
+	batchInterval time.Duration
+	catchupLimit  int
 
 	// PCAP storage
 	pcapBuffer  *PCAPBuffer
@@ -68,20 +75,43 @@ func NewServer(httpPort, grpcPort int) *Server {
 		pcapDir = "/data/pcap"
 	}
 
-	return &Server{
-		httpPort:  httpPort,
-		grpcPort:  grpcPort,
-		sessionID: sessionID,
-		pcapDir:   pcapDir,
-		flows:     make([]*protocol.Flow, 0),
-		wsClients: make(map[*websocket.Conn]bool),
+	// Read batching configuration from environment
+	batchIntervalMs := getEnvIntServer("WS_BATCH_INTERVAL_MS", 150)
+	catchupLimit := getEnvIntServer("WS_CATCHUP_LIMIT", 200)
+
+	s := &Server{
+		httpPort:      httpPort,
+		grpcPort:      grpcPort,
+		sessionID:     sessionID,
+		pcapDir:       pcapDir,
+		flowBuffer:    NewFlowRingBuffer(0), // Uses MAX_FLOWS env or default 10000
+		wsClients:     make(map[*websocket.Conn]bool),
+		flowBatch:     make([]*protocol.Flow, 0, 64),
+		batchInterval: time.Duration(batchIntervalMs) * time.Millisecond,
+		catchupLimit:  catchupLimit,
 		wsUpgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool {
 				return true // Allow all origins for local development
 			},
 		},
-		pcapBuffer: NewPCAPBuffer(pcapDir, 100*1024*1024), // 100MB buffer
+		pcapBuffer: NewPCAPBuffer(pcapDir, 50*1024*1024), // 50MB rolling buffer
 	}
+
+	// Start batch ticker for WebSocket batching
+	s.batchTicker = time.NewTicker(s.batchInterval)
+	go s.batchBroadcastLoop()
+
+	return s
+}
+
+// getEnvIntServer reads an integer from environment variable with a default value.
+func getEnvIntServer(key string, defaultVal int) int {
+	if v := os.Getenv(key); v != "" {
+		if i, err := strconv.Atoi(v); err == nil {
+			return i
+		}
+	}
+	return defaultVal
 }
 
 // Start starts the Hub server
@@ -156,13 +186,13 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleFlows(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		s.flowsMutex.RLock()
-		defer s.flowsMutex.RUnlock()
+		flows := s.flowBuffer.GetAll()
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"flows": s.flows,
-			"count": len(s.flows),
+			"flows":    flows,
+			"count":    len(flows),
+			"capacity": s.flowBuffer.Capacity(),
 		})
 
 	case http.MethodPost:
@@ -425,15 +455,19 @@ func (s *Server) handleFlowsWebSocket(w http.ResponseWriter, r *http.Request) {
 		s.wsMutex.Unlock()
 	}()
 
-	// Send existing flows
-	s.flowsMutex.RLock()
-	for _, flow := range s.flows {
-		if err := conn.WriteJSON(flow); err != nil {
-			s.flowsMutex.RUnlock()
-			return
-		}
+	// Send initial catch-up with limited flows (most recent)
+	initialFlows := s.flowBuffer.GetRecent(s.catchupLimit)
+	catchUpMsg := map[string]interface{}{
+		"type":    "catchup",
+		"flows":   initialFlows,
+		"total":   s.flowBuffer.Size(),
+		"hasMore": s.flowBuffer.Size() > s.catchupLimit,
 	}
-	s.flowsMutex.RUnlock()
+
+	if err := conn.WriteJSON(catchUpMsg); err != nil {
+		log.Printf("WebSocket catch-up error: %v", err)
+		return
+	}
 
 	// Keep connection alive and handle incoming messages
 	for {
@@ -509,9 +543,7 @@ func (s *Server) handleDownloadStreamPCAP(w http.ResponseWriter, r *http.Request
 
 // handleStats returns capture statistics
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
-	s.flowsMutex.RLock()
-	flowCount := len(s.flows)
-	s.flowsMutex.RUnlock()
+	flowCount := s.flowBuffer.Size()
 
 	s.wsMutex.Lock()
 	clientCount := len(s.wsClients)
@@ -524,6 +556,7 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"flows":        flowCount,
+		"flowCapacity": s.flowBuffer.Capacity(),
 		"wsClients":    clientCount,
 		"pcapSize":     s.pcapBuffer.Size(),
 		"sessionId":    s.sessionID,
@@ -532,23 +565,64 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// AddFlow adds a new flow and broadcasts it to WebSocket clients
+// AddFlow adds a new flow and queues it for batched WebSocket broadcast
 func (s *Server) AddFlow(flow *protocol.Flow) {
-	s.flowsMutex.Lock()
-	s.flows = append(s.flows, flow)
-	s.flowsMutex.Unlock()
+	s.flowBuffer.Add(flow)
 
-	// Broadcast to WebSocket clients
-	s.broadcastFlow(flow)
+	// Queue for batched broadcast instead of immediate send
+	s.queueFlowForBroadcast(flow)
 }
 
-// broadcastFlow sends a flow to all connected WebSocket clients
-func (s *Server) broadcastFlow(flow *protocol.Flow) {
+// queueFlowForBroadcast adds a flow to the batch queue
+func (s *Server) queueFlowForBroadcast(flow *protocol.Flow) {
+	s.batchMutex.Lock()
+	s.flowBatch = append(s.flowBatch, flow)
+	s.batchMutex.Unlock()
+}
+
+// batchBroadcastLoop runs the batching timer
+func (s *Server) batchBroadcastLoop() {
+	for range s.batchTicker.C {
+		s.flushBatch()
+	}
+}
+
+// flushBatch sends all queued flows as a single batch message
+func (s *Server) flushBatch() {
+	s.batchMutex.Lock()
+	if len(s.flowBatch) == 0 {
+		s.batchMutex.Unlock()
+		return
+	}
+	batch := s.flowBatch
+	s.flowBatch = make([]*protocol.Flow, 0, 64)
+	s.batchMutex.Unlock()
+
+	s.broadcastBatch(batch)
+}
+
+// broadcastBatch sends a batch of flows to all connected WebSocket clients
+func (s *Server) broadcastBatch(flows []*protocol.Flow) {
+	if len(flows) == 0 {
+		return
+	}
+
+	message := map[string]interface{}{
+		"type":  "batch",
+		"flows": flows,
+	}
+
+	data, err := json.Marshal(message)
+	if err != nil {
+		log.Printf("Failed to marshal batch: %v", err)
+		return
+	}
+
 	s.wsMutex.Lock()
 	defer s.wsMutex.Unlock()
 
 	for conn := range s.wsClients {
-		if err := conn.WriteJSON(flow); err != nil {
+		if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
 			log.Printf("WebSocket write error: %v", err)
 			conn.Close()
 			delete(s.wsClients, conn)

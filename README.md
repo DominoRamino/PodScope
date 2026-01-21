@@ -66,11 +66,13 @@ https://github.com/user-attachments/assets/d88ba17b-ae1d-4d20-9349-0989ac500ce8
 git clone https://github.com/podscope/podscope.git
 cd podscope
 
-# Build the CLI
-make build-cli
+# Build CLI and Docker images (agent + hub), then load into minikube
+make all
 
-# Install to PATH
-sudo make install
+# Or build components individually:
+make build-cli    # CLI binary only
+make build        # Docker images only (agent + hub)
+make load         # Load images into minikube
 ```
 
 ### Usage
@@ -98,26 +100,29 @@ Press `Ctrl+C` to stop and clean up all resources.
 ### Building
 
 ```bash
-# Build everything
-make build
+# Build everything (CLI + images) and load into minikube
+make all
 
 # Build just the CLI
 make build-cli
 
-# Build Docker images
-make docker-build
+# Build Docker images (agent + hub in parallel)
+make build
 
-# Run tests
-make test
+# Load images into minikube
+make load
 ```
 
-### Running Locally
+### Development Workflow
 
 ```bash
-# Start the Hub in development mode
-make dev-hub
+# Full dev loop: build, load, restart test pods, run capture
+make dev
 
-# In another terminal, start the UI development server
+# Smart rebuild: only rebuilds changed components
+make dev-quick
+
+# UI-only development with Vite hot-reload
 make dev-ui
 ```
 
