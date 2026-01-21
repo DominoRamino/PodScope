@@ -1,4 +1,4 @@
-.PHONY: all build build-agent build-hub build-cli build-cli-linux load clean help version inspect use-tag setup-cluster dev dev-quick dev-ui load-agent load-hub restart-test-pods
+.PHONY: all build build-agent build-hub build-cli build-cli-linux load clean help version inspect use-tag setup-cluster dev dev-quick dev-ui load-agent load-hub restart-test-pods test
 
 # Default target
 all: build-cli build load
@@ -175,3 +175,9 @@ restart-test-pods:
 	@kubectl rollout restart deploy podinfo -n default 
 	@kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=podinfo -n default --timeout=60s
 	@echo "✓ Test pods restarted"
+
+# Run unit tests
+test:
+	@echo "Running unit tests..."
+	go test -v -race ./pkg/...
+	@echo "✓ Tests complete"
