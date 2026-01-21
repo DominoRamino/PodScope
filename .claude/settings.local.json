@@ -33,7 +33,21 @@
       "Bash(minikube ssh:*)",
       "Bash(chmod +x test-bpf-filter.sh debug.sh ls -lh *.sh)",
       "Bash(make:*)",
-      "Bash(kubectl exec:*)"
+      "Bash(kubectl exec:*)",
+      "Bash(wsl kubectl logs:*)",
+      "Bash(wsl kubectl get pod:*)",
+      "Bash(wsl kubectl exec:*)",
+      "Bash(curl:*)",
+      "Bash(python3:*)",
+      "Bash(npx vite build)",
+      "Bash(wsl bash -c \"cd /mnt/c/Users/alram/Documents/PodScope/ui && npm run build\")",
+      "Bash(wsl kubectl cp:*)",
+      "Bash(wsl bash -c \"kubectl cp /mnt/c/Users/alram/Documents/PodScope/ui/dist podscope-1f97d204/podscope-hub-7d5c9fc446-bhndz:/app/ui-new && kubectl exec -n podscope-1f97d204 podscope-hub-7d5c9fc446-bhndz -- sh -c ''rm -rf /app/ui/* && mv /app/ui-new/* /app/ui/''\")",
+      "Bash(chmod:*)",
+      "Bash(wsl cat:*)",
+      "Bash(wsl bash -c \"cat ~/.kube/config\")",
+      "Bash(wsl kubectl get pods:*)",
+      "Bash(wsl kubectl get:*)"
     ]
   }
 }
