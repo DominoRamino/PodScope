@@ -4,7 +4,44 @@ import (
 	"bytes"
 	"encoding/binary"
 	"testing"
+	"time"
+
+	"github.com/google/gopacket"
 )
+
+// mockPacket implements gopacket.Packet for testing
+type mockPacket struct {
+	data      []byte
+	timestamp time.Time
+}
+
+func (m *mockPacket) Data() []byte {
+	return m.data
+}
+
+func (m *mockPacket) Metadata() *gopacket.PacketMetadata {
+	return &gopacket.PacketMetadata{
+		CaptureInfo: gopacket.CaptureInfo{
+			Timestamp: m.timestamp,
+		},
+	}
+}
+
+// Implement remaining gopacket.Packet interface methods with no-op implementations
+func (m *mockPacket) String() string                          { return "" }
+func (m *mockPacket) Dump() string                            { return "" }
+func (m *mockPacket) Layers() []gopacket.Layer                { return nil }
+func (m *mockPacket) Layer(gopacket.LayerType) gopacket.Layer { return nil }
+func (m *mockPacket) LayerClass(gopacket.LayerClass) gopacket.Layer {
+	return nil
+}
+func (m *mockPacket) LinkLayer() gopacket.LinkLayer           { return nil }
+func (m *mockPacket) NetworkLayer() gopacket.NetworkLayer     { return nil }
+func (m *mockPacket) TransportLayer() gopacket.TransportLayer { return nil }
+func (m *mockPacket) ApplicationLayer() gopacket.ApplicationLayer {
+	return nil
+}
+func (m *mockPacket) ErrorLayer() gopacket.ErrorLayer { return nil }
 
 // TestWritePCAPHeader_MagicNumber verifies the PCAP magic number is correct
 func TestWritePCAPHeader_MagicNumber(t *testing.T) {
@@ -155,5 +192,275 @@ func TestWritePCAPHeader_SigfigsZero(t *testing.T) {
 	sigfigs := binary.LittleEndian.Uint32(data[12:16])
 	if sigfigs != 0 {
 		t.Errorf("Expected sigfigs 0, got %d", sigfigs)
+	}
+}
+
+// =====================================================================
+// Tests for writePCAPPacket (PCAP packet header encoding)
+// =====================================================================
+
+// TestWritePCAPPacket_TimestampSeconds verifies timestamp seconds encoded correctly
+func TestWritePCAPPacket_TimestampSeconds(t *testing.T) {
+	c := &Capturer{}
+
+	// Create a packet with a specific timestamp
+	ts := time.Date(2024, 6, 15, 10, 30, 45, 0, time.UTC)
+	packet := &mockPacket{
+		data:      []byte{0x01, 0x02, 0x03, 0x04},
+		timestamp: ts,
+	}
+
+	c.writePCAPPacket(packet)
+
+	data := c.pcapBuffer.Bytes()
+	if len(data) < 4 {
+		t.Fatalf("Expected at least 4 bytes for timestamp seconds, got %d", len(data))
+	}
+
+	// Timestamp seconds is at bytes 0-3 (little-endian)
+	tsSec := binary.LittleEndian.Uint32(data[0:4])
+	expected := uint32(ts.Unix())
+	if tsSec != expected {
+		t.Errorf("Expected timestamp seconds %d, got %d", expected, tsSec)
+	}
+}
+
+// TestWritePCAPPacket_TimestampMicroseconds verifies timestamp microseconds computed correctly
+func TestWritePCAPPacket_TimestampMicroseconds(t *testing.T) {
+	c := &Capturer{}
+
+	// Create a packet with nanoseconds that translate to specific microseconds
+	// 123456789 nanoseconds = 123456 microseconds (integer division)
+	ts := time.Date(2024, 6, 15, 10, 30, 45, 123456789, time.UTC)
+	packet := &mockPacket{
+		data:      []byte{0x01, 0x02, 0x03, 0x04},
+		timestamp: ts,
+	}
+
+	c.writePCAPPacket(packet)
+
+	data := c.pcapBuffer.Bytes()
+	if len(data) < 8 {
+		t.Fatalf("Expected at least 8 bytes for timestamp fields, got %d", len(data))
+	}
+
+	// Timestamp microseconds is at bytes 4-7 (little-endian)
+	tsUsec := binary.LittleEndian.Uint32(data[4:8])
+	expected := uint32(123456) // 123456789 / 1000 = 123456
+	if tsUsec != expected {
+		t.Errorf("Expected timestamp microseconds %d, got %d", expected, tsUsec)
+	}
+}
+
+// TestWritePCAPPacket_IncludedLength verifies included length matches actual data length
+func TestWritePCAPPacket_IncludedLength(t *testing.T) {
+	c := &Capturer{}
+
+	packetData := []byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08}
+	packet := &mockPacket{
+		data:      packetData,
+		timestamp: time.Now(),
+	}
+
+	c.writePCAPPacket(packet)
+
+	data := c.pcapBuffer.Bytes()
+	if len(data) < 12 {
+		t.Fatalf("Expected at least 12 bytes for included length field, got %d", len(data))
+	}
+
+	// Included length is at bytes 8-11 (little-endian)
+	inclLen := binary.LittleEndian.Uint32(data[8:12])
+	expected := uint32(len(packetData))
+	if inclLen != expected {
+		t.Errorf("Expected included length %d, got %d", expected, inclLen)
+	}
+}
+
+// TestWritePCAPPacket_OriginalLength verifies original length field set correctly
+func TestWritePCAPPacket_OriginalLength(t *testing.T) {
+	c := &Capturer{}
+
+	packetData := []byte{0x01, 0x02, 0x03, 0x04, 0x05}
+	packet := &mockPacket{
+		data:      packetData,
+		timestamp: time.Now(),
+	}
+
+	c.writePCAPPacket(packet)
+
+	data := c.pcapBuffer.Bytes()
+	if len(data) < 16 {
+		t.Fatalf("Expected at least 16 bytes for original length field, got %d", len(data))
+	}
+
+	// Original length is at bytes 12-15 (little-endian)
+	origLen := binary.LittleEndian.Uint32(data[12:16])
+	expected := uint32(len(packetData))
+	if origLen != expected {
+		t.Errorf("Expected original length %d, got %d", expected, origLen)
+	}
+}
+
+// TestWritePCAPPacket_DataAppendedAfterHeader verifies packet data appended after 16-byte header
+func TestWritePCAPPacket_DataAppendedAfterHeader(t *testing.T) {
+	c := &Capturer{}
+
+	packetData := []byte{0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe}
+	packet := &mockPacket{
+		data:      packetData,
+		timestamp: time.Now(),
+	}
+
+	c.writePCAPPacket(packet)
+
+	data := c.pcapBuffer.Bytes()
+
+	// Total should be 16 bytes header + packet data length
+	expectedTotal := 16 + len(packetData)
+	if len(data) != expectedTotal {
+		t.Fatalf("Expected total length %d, got %d", expectedTotal, len(data))
+	}
+
+	// Packet data should start at byte 16
+	actualData := data[16:]
+	if !bytes.Equal(actualData, packetData) {
+		t.Errorf("Packet data mismatch\nExpected: %v\nGot:      %v", packetData, actualData)
+	}
+}
+
+// TestWritePCAPPacket_HeaderSize verifies packet header is exactly 16 bytes
+func TestWritePCAPPacket_HeaderSize(t *testing.T) {
+	c := &Capturer{}
+
+	// Use empty data to verify header size alone
+	packet := &mockPacket{
+		data:      []byte{},
+		timestamp: time.Now(),
+	}
+
+	c.writePCAPPacket(packet)
+
+	data := c.pcapBuffer.Bytes()
+	expectedHeaderSize := 16
+	if len(data) != expectedHeaderSize {
+		t.Errorf("Expected packet header size %d bytes, got %d", expectedHeaderSize, len(data))
+	}
+}
+
+// TestWritePCAPPacket_ZeroTimestamp verifies handling of zero timestamp (Unix epoch)
+func TestWritePCAPPacket_ZeroTimestamp(t *testing.T) {
+	c := &Capturer{}
+
+	// Unix epoch: January 1, 1970 00:00:00 UTC
+	ts := time.Unix(0, 0)
+	packet := &mockPacket{
+		data:      []byte{0x01},
+		timestamp: ts,
+	}
+
+	c.writePCAPPacket(packet)
+
+	data := c.pcapBuffer.Bytes()
+	if len(data) < 8 {
+		t.Fatalf("Expected at least 8 bytes for timestamp fields, got %d", len(data))
+	}
+
+	tsSec := binary.LittleEndian.Uint32(data[0:4])
+	tsUsec := binary.LittleEndian.Uint32(data[4:8])
+
+	if tsSec != 0 {
+		t.Errorf("Expected timestamp seconds 0, got %d", tsSec)
+	}
+	if tsUsec != 0 {
+		t.Errorf("Expected timestamp microseconds 0, got %d", tsUsec)
+	}
+}
+
+// TestWritePCAPPacket_LargePacket verifies handling of large packet data
+func TestWritePCAPPacket_LargePacket(t *testing.T) {
+	c := &Capturer{}
+
+	// Create a large packet (1500 bytes - typical MTU)
+	packetData := make([]byte, 1500)
+	for i := range packetData {
+		packetData[i] = byte(i % 256)
+	}
+
+	packet := &mockPacket{
+		data:      packetData,
+		timestamp: time.Now(),
+	}
+
+	c.writePCAPPacket(packet)
+
+	data := c.pcapBuffer.Bytes()
+
+	// Verify included and original lengths
+	inclLen := binary.LittleEndian.Uint32(data[8:12])
+	origLen := binary.LittleEndian.Uint32(data[12:16])
+
+	if inclLen != 1500 {
+		t.Errorf("Expected included length 1500, got %d", inclLen)
+	}
+	if origLen != 1500 {
+		t.Errorf("Expected original length 1500, got %d", origLen)
+	}
+
+	// Verify packet data integrity
+	actualData := data[16:]
+	if !bytes.Equal(actualData, packetData) {
+		t.Error("Large packet data mismatch")
+	}
+}
+
+// TestWritePCAPPacket_MultiplePackets verifies multiple packets written sequentially
+func TestWritePCAPPacket_MultiplePackets(t *testing.T) {
+	c := &Capturer{}
+
+	packet1Data := []byte{0x01, 0x02, 0x03}
+	packet1 := &mockPacket{
+		data:      packet1Data,
+		timestamp: time.Unix(1000, 0),
+	}
+
+	packet2Data := []byte{0x04, 0x05}
+	packet2 := &mockPacket{
+		data:      packet2Data,
+		timestamp: time.Unix(2000, 0),
+	}
+
+	c.writePCAPPacket(packet1)
+	c.writePCAPPacket(packet2)
+
+	data := c.pcapBuffer.Bytes()
+
+	// Expected total: (16 + 3) + (16 + 2) = 37 bytes
+	expectedTotal := (16 + 3) + (16 + 2)
+	if len(data) != expectedTotal {
+		t.Fatalf("Expected total length %d, got %d", expectedTotal, len(data))
+	}
+
+	// Verify first packet timestamp (bytes 0-3)
+	ts1 := binary.LittleEndian.Uint32(data[0:4])
+	if ts1 != 1000 {
+		t.Errorf("Expected first packet timestamp 1000, got %d", ts1)
+	}
+
+	// Verify first packet data (bytes 16-18)
+	if !bytes.Equal(data[16:19], packet1Data) {
+		t.Errorf("First packet data mismatch")
+	}
+
+	// Second packet starts at byte 19
+	// Verify second packet timestamp (bytes 19-22)
+	ts2 := binary.LittleEndian.Uint32(data[19:23])
+	if ts2 != 2000 {
+		t.Errorf("Expected second packet timestamp 2000, got %d", ts2)
+	}
+
+	// Verify second packet data (bytes 35-36)
+	if !bytes.Equal(data[35:37], packet2Data) {
+		t.Errorf("Second packet data mismatch")
 	}
 }
