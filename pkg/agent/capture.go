@@ -33,26 +33,26 @@ type Capturer struct {
 	agentInfo        *protocol.AgentInfo
 
 	// Packet buffer for PCAP
-	pcapBuffer  bytes.Buffer
-	pcapMutex   sync.Mutex
+	pcapBuffer bytes.Buffer
+	pcapMutex  sync.Mutex
 
 	// TCP stream reassembly
-	assembler   *TCPAssembler
+	assembler *TCPAssembler
 
 	// Stats
-	stats       CaptureStats
-	statsMutex  sync.RWMutex
+	stats      CaptureStats
+	statsMutex sync.RWMutex
 }
 
 // CaptureStats holds capture statistics
 type CaptureStats struct {
-	PacketsCaptured  uint64
-	BytesCaptured    uint64
-	TCPPackets       uint64
-	UDPPackets       uint64
-	HTTPRequests     uint64
-	TLSHandshakes    uint64
-	Errors           uint64
+	PacketsCaptured uint64
+	BytesCaptured   uint64
+	TCPPackets      uint64
+	UDPPackets      uint64
+	HTTPRequests    uint64
+	TLSHandshakes   uint64
+	Errors          uint64
 }
 
 // NewCapturer creates a new packet capturer
@@ -181,18 +181,6 @@ func (c *Capturer) processPacket(packet gopacket.Packet) {
 		return
 	}
 
-	// DEBUG: Log DNS packets that get through BPF filter
-	switch tl := transportLayer.(type) {
-	case *layers.TCP:
-		if tl.SrcPort == 53 || tl.DstPort == 53 {
-			log.Printf("WARNING: DNS TCP packet captured despite BPF filter! %d->%d", tl.SrcPort, tl.DstPort)
-		}
-	case *layers.UDP:
-		if tl.SrcPort == 53 || tl.DstPort == 53 {
-			log.Printf("WARNING: DNS UDP packet captured despite BPF filter! %d->%d", tl.SrcPort, tl.DstPort)
-		}
-	}
-
 	switch transportLayer.LayerType() {
 	case layers.LayerTypeTCP:
 		c.statsMutex.Lock()
@@ -240,8 +228,8 @@ func (c *Capturer) writePCAPHeader() {
 	// Magic number (0xa1b2c3d4), version 2.4, timezone 0, sigfigs 0, snaplen 65535, linktype 1 (ethernet)
 	header := []byte{
 		0xd4, 0xc3, 0xb2, 0xa1, // Magic number (little-endian)
-		0x02, 0x00,             // Version major
-		0x04, 0x00,             // Version minor
+		0x02, 0x00, // Version major
+		0x04, 0x00, // Version minor
 		0x00, 0x00, 0x00, 0x00, // Timezone
 		0x00, 0x00, 0x00, 0x00, // Sigfigs
 		0xff, 0xff, 0x00, 0x00, // Snaplen (65535)
