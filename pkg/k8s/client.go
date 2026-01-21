@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -128,4 +129,47 @@ func (c *Client) CheckEphemeralContainerSupport(ctx context.Context) error {
 
 	fmt.Printf("Kubernetes server version: %s.%s\n", version.Major, version.Minor)
 	return nil
+}
+
+// CleanupStaleSessions finds and deletes PodScope session namespaces older than maxAge.
+// This handles orphaned sessions from ungraceful CLI exits (crashes, SIGKILL, etc).
+func (c *Client) CleanupStaleSessions(ctx context.Context, maxAge time.Duration) (int, error) {
+	// List all namespaces with podscope label
+	namespaces, err := c.clientset.CoreV1().Namespaces().List(ctx, metav1.ListOptions{
+		LabelSelector: "app.kubernetes.io/managed-by=podscope-cli",
+	})
+	if err != nil {
+		return 0, fmt.Errorf("failed to list namespaces: %w", err)
+	}
+
+	cleaned := 0
+	now := time.Now().UTC()
+
+	for _, ns := range namespaces.Items {
+		// Check creation timestamp from annotation
+		createdAtStr, ok := ns.Annotations["podscope.io/created-at"]
+		if !ok {
+			// Fallback to namespace creation time if annotation missing
+			createdAtStr = ns.CreationTimestamp.Format(time.RFC3339)
+		}
+
+		createdAt, err := time.Parse(time.RFC3339, createdAtStr)
+		if err != nil {
+			fmt.Printf("Warning: could not parse creation time for %s: %v\n", ns.Name, err)
+			continue
+		}
+
+		age := now.Sub(createdAt)
+		if age > maxAge {
+			fmt.Printf("Cleaning up stale session: %s (age: %s)\n", ns.Name, age.Round(time.Second))
+			err := c.clientset.CoreV1().Namespaces().Delete(ctx, ns.Name, metav1.DeleteOptions{})
+			if err != nil {
+				fmt.Printf("Warning: failed to delete namespace %s: %v\n", ns.Name, err)
+				continue
+			}
+			cleaned++
+		}
+	}
+
+	return cleaned, nil
 }

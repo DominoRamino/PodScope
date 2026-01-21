@@ -6,10 +6,16 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/podscope/podscope/pkg/k8s"
 	"github.com/spf13/cobra"
 )
+
+// staleSessionMaxAge is how old a session must be before it's considered stale
+// and eligible for automatic cleanup. Set to 1 hour to avoid cleaning up
+// sessions that are still in use but just older.
+const staleSessionMaxAge = 1 * time.Hour
 
 var (
 	namespace       string
@@ -62,6 +68,13 @@ func runTap(cmd *cobra.Command, args []string) error {
 	k8sClient, err := k8s.NewClient()
 	if err != nil {
 		return fmt.Errorf("failed to create Kubernetes client: %w", err)
+	}
+
+	// Clean up any stale sessions from previous ungraceful exits
+	if cleaned, err := k8sClient.CleanupStaleSessions(ctx, staleSessionMaxAge); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to cleanup stale sessions: %v\n", err)
+	} else if cleaned > 0 {
+		fmt.Printf("Cleaned up %d stale session(s)\n", cleaned)
 	}
 
 	// Create session manager

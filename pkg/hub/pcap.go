@@ -93,6 +93,15 @@ func (p *PCAPBuffer) Write(agentID string, data []byte) error {
 		dataToWrite = data[24:]
 	}
 
+	// Check if adding this data would exceed the max size
+	// If so, rotate the buffer by truncating older data
+	if p.maxSize > 0 && p.totalSize+int64(len(dataToWrite)) > p.maxSize {
+		if err := p.rotateBuffer(int64(len(dataToWrite))); err != nil {
+			// Log but continue - better to have some data than none
+			fmt.Printf("Warning: failed to rotate PCAP buffer: %v\n", err)
+		}
+	}
+
 	// Write data
 	n, err := ab.file.Write(dataToWrite)
 	if err != nil {
@@ -101,6 +110,98 @@ func (p *PCAPBuffer) Write(agentID string, data []byte) error {
 
 	ab.size += int64(n)
 	p.totalSize += int64(n)
+
+	return nil
+}
+
+// rotateBuffer removes old data to make room for new data
+// Called with mutex already held
+func (p *PCAPBuffer) rotateBuffer(needed int64) error {
+	// Target: free up enough space to get below 80% of max, plus room for new data
+	target := int64(float64(p.maxSize)*0.8) - needed
+	if target < 0 {
+		target = 0
+	}
+
+	// Find the agent with the most data and truncate it
+	// Simple strategy: truncate the largest file by half until we're under target
+	for p.totalSize > target {
+		// Find largest agent buffer
+		var largest *agentBuffer
+		for _, ab := range p.agents {
+			if largest == nil || ab.size > largest.size {
+				largest = ab
+			}
+		}
+
+		if largest == nil || largest.size <= 24 {
+			// No data to remove (only headers left)
+			break
+		}
+
+		// Truncate this file: keep the header (24 bytes) and the newest half of data
+		keepSize := largest.size / 2
+		if keepSize < 24 {
+			keepSize = 24 // At minimum, keep the header
+		}
+
+		if err := p.truncateAgentBuffer(largest, keepSize); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// truncateAgentBuffer truncates an agent's PCAP file, keeping only the newest data
+// Called with mutex already held
+func (p *PCAPBuffer) truncateAgentBuffer(ab *agentBuffer, keepSize int64) error {
+	// Close current file
+	if err := ab.file.Sync(); err != nil {
+		return err
+	}
+
+	// Read current file content
+	oldData, err := os.ReadFile(ab.filePath)
+	if err != nil {
+		return err
+	}
+
+	if int64(len(oldData)) <= keepSize {
+		return nil // Nothing to truncate
+	}
+
+	// Calculate how much to remove from total
+	removed := int64(len(oldData)) - keepSize
+
+	// Keep PCAP header (24 bytes) + newest data
+	// The newest data is at the end of the file
+	var newData bytes.Buffer
+	newData.Write(oldData[:24])                             // PCAP global header
+	newData.Write(oldData[int64(len(oldData))-keepSize+24:]) // Newest packets
+
+	// Seek to beginning and truncate
+	if _, err := ab.file.Seek(0, 0); err != nil {
+		return err
+	}
+	if err := ab.file.Truncate(0); err != nil {
+		return err
+	}
+
+	// Write new content
+	n, err := ab.file.Write(newData.Bytes())
+	if err != nil {
+		return err
+	}
+
+	// Update sizes
+	ab.size = int64(n)
+	p.totalSize -= removed
+
+	// Seek back to end for future appends
+	if _, err := ab.file.Seek(0, 2); err != nil {
+		return err
+	}
 
 	return nil
 }

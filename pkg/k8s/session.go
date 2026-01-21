@@ -102,6 +102,9 @@ func (s *Session) createNamespace(ctx context.Context) error {
 				"app.kubernetes.io/managed-by": "podscope-cli",
 				"podscope.io/session-id":       s.id,
 			},
+			Annotations: map[string]string{
+				"podscope.io/created-at": time.Now().UTC().Format(time.RFC3339),
+			},
 		},
 	}
 
@@ -337,15 +340,21 @@ func (s *Session) InjectAgent(ctx context.Context, target PodTarget, privileged 
 		return fmt.Errorf("failed to get pod: %w", err)
 	}
 
-	// Check if agent is already injected
+	// Check if a podscope agent is already RUNNING in this pod
+	// (Terminated agents from previous sessions are OK - we'll create a new one)
 	for _, ec := range pod.Spec.EphemeralContainers {
 		if strings.HasPrefix(ec.Name, "podscope-agent") {
-			return fmt.Errorf("agent already injected")
+			// Check container status - only block if still running
+			for _, status := range pod.Status.EphemeralContainerStatuses {
+				if status.Name == ec.Name && status.State.Running != nil {
+					return fmt.Errorf("agent %s already running in pod", ec.Name)
+				}
+			}
 		}
 	}
 
-	// Create the ephemeral container spec
-	agentName := fmt.Sprintf("podscope-agent-%s", s.id[:4])
+	// Create the ephemeral container spec with unique name per session
+	agentName := fmt.Sprintf("podscope-agent-%s", s.id)
 
 	securityContext := &corev1.SecurityContext{
 		Capabilities: &corev1.Capabilities{

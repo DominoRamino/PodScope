@@ -45,7 +45,7 @@ build-cli:
 	@echo "Usage: ./podscope tap -n <namespace> --pod <pod-name>"
 	@echo "Will use images: podscope-agent:$(IMAGE_TAG) and podscope:$(IMAGE_TAG)"
 
-# Build the CLI binary for Linux (to run in WSL)
+# Build the CLI binary for Linux (to run in )
 build-cli-linux:
 	@echo "Building podscope CLI (Linux)..."
 	@echo "  Version: $(VERSION)"
@@ -84,11 +84,11 @@ build-hub:
 		.
 	@echo "✓ Hub image built: podscope:$(IMAGE_TAG)"
 
-# Load images into minikube (via WSL)
+# Load images into minikube (via )
 load:
 	@echo "Loading images into minikube..."
-	@wsl minikube image load podscope-agent:$(IMAGE_TAG)
-	@wsl minikube image load podscope:$(IMAGE_TAG)
+	@minikube image load podscope-agent:$(IMAGE_TAG)
+	@minikube image load podscope:$(IMAGE_TAG)
 	@echo "✓ Images loaded into minikube:"
 	@echo "    podscope-agent:$(IMAGE_TAG)"
 	@echo "    podscope:$(IMAGE_TAG)"
@@ -129,14 +129,14 @@ quick: build
 
 # Ensure cluster is ready with test workloads
 setup-cluster:
-	@wsl bash ./scripts/setup-cluster.sh
+	@bash ./scripts/setup-cluster.sh
 
 # Full development loop: build everything, load, run
 dev:
 	@$(MAKE) setup-cluster build-cli-linux build load restart-test-pods
 	@echo ""
 	@echo "Starting PodScope session..."
-	@wsl ./podscope-linux tap -n default -l app.kubernetes.io/name=podinfo --ui-port 8899
+	@./podscope-linux tap -n default -l app.kubernetes.io/name=podinfo --ui-port 8899
 
 # Smart rebuild: only rebuild changed components
 dev-quick: setup-cluster build-cli-linux
@@ -156,22 +156,22 @@ dev-quick: setup-cluster build-cli-linux
 	@$(MAKE) restart-test-pods
 	@echo ""
 	@echo "Starting PodScope session..."
-	@wsl ./podscope-linux tap -n default -l app.kubernetes.io/name=podinfo --ui-port 8899
+	@./podscope-linux tap -n default -l app.kubernetes.io/name=podinfo --ui-port 8899
 
 # UI-only development (Vite hot-reload)
 dev-ui:
 	@cd ui && npm run dev
 
-# Individual image loading (via WSL)
+# Individual image loading (via )
 load-agent:
-	@wsl minikube image load podscope-agent:$(IMAGE_TAG)
+	@minikube image load podscope-agent:$(IMAGE_TAG)
 
 load-hub:
-	@wsl minikube image load podscope:$(IMAGE_TAG)
+	@minikube image load podscope:$(IMAGE_TAG)
 
-# Clean up ephemeral containers by restarting test pods (via WSL)
+# Clean up ephemeral containers by restarting test pods (via )
 restart-test-pods:
 	@echo "Restarting podinfo pods to clear ephemeral containers..."
-	@wsl kubectl delete pods -l app.kubernetes.io/name=podinfo -n default
-	@wsl kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=podinfo -n default --timeout=60s
+	@kubectl rollout restart deploy podinfo -n default 
+	@kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=podinfo -n default --timeout=60s
 	@echo "✓ Test pods restarted"

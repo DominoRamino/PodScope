@@ -61,6 +61,7 @@ function App() {
 
         try {
           const flow = JSON.parse(event.data) as Flow
+          console.log('Received flow:', flow.id, flow.protocol, flow.srcPort, '->', flow.dstPort)
           setFlows(prev => {
             // Check if flow already exists (update) or new
             const existingIndex = prev.findIndex(f => f.id === flow.id)
@@ -121,6 +122,7 @@ function App() {
   const DNS_PORT = 53
 
   // Filter flows
+  console.log('Filtering flows. Total:', flows.length, 'showAllPorts:', filterOptions.showAllPorts, 'showOnlyHTTP:', filterOptions.showOnlyHTTP)
   const filteredFlows = flows.filter(flow => {
     // Protocol/Port filtering
     if (filterOptions.showAllPorts) {

@@ -84,6 +84,16 @@ func main() {
 
 	defer hubClient.Close()
 
+	// Setup context with cancellation
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Set disconnect callback to trigger graceful shutdown when hub goes away
+	hubClient.SetOnDisconnect(func() {
+		log.Println("Hub disconnected, initiating graceful shutdown...")
+		cancel()
+	})
+
 	// Create capturer
 	capturer := agent.NewCapturer(iface, agentInfo, hubClient)
 
@@ -102,10 +112,6 @@ func main() {
 	} else {
 		log.Printf("WARNING: No BPF filter set! All traffic will be captured!")
 	}
-
-	// Setup context with cancellation
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
 	// Handle signals
 	sigChan := make(chan os.Signal, 1)

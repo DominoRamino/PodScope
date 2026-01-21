@@ -80,7 +80,7 @@ func NewServer(httpPort, grpcPort int) *Server {
 				return true // Allow all origins for local development
 			},
 		},
-		pcapBuffer: NewPCAPBuffer(pcapDir, 100*1024*1024), // 100MB buffer
+		pcapBuffer: NewPCAPBuffer(pcapDir, 50*1024*1024), // 50MB rolling buffer
 	}
 }
 
