@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { FlowList } from './components/FlowList'
 import { FlowDetail } from './components/FlowDetail'
 import { Header } from './components/Header'
@@ -60,20 +60,46 @@ function App() {
         if (isPausedRef.current) return
 
         try {
-          const flow = JSON.parse(event.data) as Flow
-          console.log('Received flow:', flow.id, flow.protocol, flow.srcPort, '->', flow.dstPort)
-          setFlows(prev => {
-            // Check if flow already exists (update) or new
-            const existingIndex = prev.findIndex(f => f.id === flow.id)
-            if (existingIndex >= 0) {
-              const updated = [...prev]
-              updated[existingIndex] = flow
-              return updated
-            }
-            return [flow, ...prev].slice(0, 1000) // Keep max 1000 flows
-          })
+          const message = JSON.parse(event.data)
+
+          // Handle batch and catchup messages from Hub
+          if (message.type === 'catchup' || message.type === 'batch') {
+            const newFlows = message.flows as Flow[]
+            console.log(`Received ${message.type}:`, newFlows.length, 'flows')
+
+            setFlows(prev => {
+              // Create a map for O(1) lookups
+              const flowMap = new Map(prev.map(f => [f.id, f]))
+
+              // Update or add each flow
+              for (const flow of newFlows) {
+                flowMap.set(flow.id, flow)
+              }
+
+              // Convert back to array and sort by timestamp (newest first)
+              const allFlows = Array.from(flowMap.values())
+              allFlows.sort((a, b) =>
+                new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+              )
+              return allFlows.slice(0, 1000) // Keep max 1000 flows
+            })
+          } else {
+            // Legacy single flow message (backward compatibility)
+            const flow = message as Flow
+            console.log('Received flow:', flow.id, flow.protocol, flow.srcPort, '->', flow.dstPort)
+            setFlows(prev => {
+              // Check if flow already exists (update) or new
+              const existingIndex = prev.findIndex(f => f.id === flow.id)
+              if (existingIndex >= 0) {
+                const updated = [...prev]
+                updated[existingIndex] = flow
+                return updated
+              }
+              return [flow, ...prev].slice(0, 1000) // Keep max 1000 flows
+            })
+          }
         } catch (err) {
-          console.error('Failed to parse flow:', err)
+          console.error('Failed to parse message:', err)
         }
       }
 
@@ -117,44 +143,45 @@ function App() {
     return () => clearInterval(interval)
   }, [])
 
-  // Common HTTP/HTTPS ports
-  const HTTP_PORTS = new Set([80, 443, 8080, 8443, 3000, 5000, 8000, 8888, 9090])
+  // Common HTTP/HTTPS ports - memoized to avoid recreating on every render
+  const HTTP_PORTS = useMemo(() => new Set([80, 443, 8080, 8443, 3000, 5000, 8000, 8888, 9090]), [])
   const DNS_PORT = 53
 
-  // Filter flows
-  console.log('Filtering flows. Total:', flows.length, 'showAllPorts:', filterOptions.showAllPorts, 'showOnlyHTTP:', filterOptions.showOnlyHTTP)
-  const filteredFlows = flows.filter(flow => {
-    // Protocol/Port filtering
-    if (filterOptions.showAllPorts) {
-      // Show everything (no port filtering)
-    } else if (filterOptions.showOnlyHTTP) {
-      // Show only HTTP/HTTPS ports
-      const isHTTPPort = HTTP_PORTS.has(flow.srcPort) || HTTP_PORTS.has(flow.dstPort)
-      const isHTTPProtocol = flow.protocol === 'HTTP' || flow.protocol === 'HTTPS'
-      if (!isHTTPPort && !isHTTPProtocol) return false
-    }
+  // Memoized filtered flows - only recalculates when dependencies change
+  const filteredFlows = useMemo(() => {
+    return flows.filter(flow => {
+      // Protocol/Port filtering
+      if (filterOptions.showAllPorts) {
+        // Show everything (no port filtering)
+      } else if (filterOptions.showOnlyHTTP) {
+        // Show only HTTP/HTTPS ports
+        const isHTTPPort = HTTP_PORTS.has(flow.srcPort) || HTTP_PORTS.has(flow.dstPort)
+        const isHTTPProtocol = flow.protocol === 'HTTP' || flow.protocol === 'HTTPS'
+        if (!isHTTPPort && !isHTTPProtocol) return false
+      }
 
-    // DNS filtering (skip if showAllPorts is enabled)
-    if (!filterOptions.showAllPorts && !filterOptions.showDNS) {
-      const isDNS = flow.srcPort === DNS_PORT || flow.dstPort === DNS_PORT
-      if (isDNS) return false
-    }
+      // DNS filtering (skip if showAllPorts is enabled)
+      if (!filterOptions.showAllPorts && !filterOptions.showDNS) {
+        const isDNS = flow.srcPort === DNS_PORT || flow.dstPort === DNS_PORT
+        if (isDNS) return false
+      }
 
-    // Text search filter
-    if (!filter && !filterOptions.searchText) return true
-    const searchLower = (filter || filterOptions.searchText).toLowerCase()
-    return (
-      flow.srcIp?.toLowerCase().includes(searchLower) ||
-      flow.dstIp?.toLowerCase().includes(searchLower) ||
-      flow.srcPod?.toLowerCase().includes(searchLower) ||
-      flow.dstPod?.toLowerCase().includes(searchLower) ||
-      flow.dstService?.toLowerCase().includes(searchLower) ||
-      flow.protocol?.toLowerCase().includes(searchLower) ||
-      flow.http?.url?.toLowerCase().includes(searchLower) ||
-      flow.http?.host?.toLowerCase().includes(searchLower) ||
-      flow.tls?.sni?.toLowerCase().includes(searchLower)
-    )
-  })
+      // Text search filter
+      if (!filter && !filterOptions.searchText) return true
+      const searchLower = (filter || filterOptions.searchText).toLowerCase()
+      return (
+        flow.srcIp?.toLowerCase().includes(searchLower) ||
+        flow.dstIp?.toLowerCase().includes(searchLower) ||
+        flow.srcPod?.toLowerCase().includes(searchLower) ||
+        flow.dstPod?.toLowerCase().includes(searchLower) ||
+        flow.dstService?.toLowerCase().includes(searchLower) ||
+        flow.protocol?.toLowerCase().includes(searchLower) ||
+        flow.http?.url?.toLowerCase().includes(searchLower) ||
+        flow.http?.host?.toLowerCase().includes(searchLower) ||
+        flow.tls?.sni?.toLowerCase().includes(searchLower)
+      )
+    })
+  }, [flows, filter, filterOptions, HTTP_PORTS])
 
   // Parse pod name to extract namespace and pod
   const parsePodName = (podName: string): { namespace: string; name: string } | null => {

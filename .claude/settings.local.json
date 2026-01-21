@@ -48,7 +48,8 @@
       "Bash(wsl bash -c \"cat ~/.kube/config\")",
       "Bash(wsl kubectl get pods:*)",
       "Bash(wsl kubectl get:*)",
-      "Bash(git -C \"c:\\\\Users\\\\alram\\\\Documents\\\\PodScope\" log --oneline -5 -- Makefile)"
+      "Bash(git -C \"c:\\\\Users\\\\alram\\\\Documents\\\\PodScope\" log --oneline -5 -- Makefile)",
+      "Bash(go test:*)"
     ]
   }
 }
