@@ -790,3 +790,377 @@ func TestExtractSNI_SNINotFirstExtension(t *testing.T) {
 		t.Errorf("extractSNI() = %q, want %q when SNI is not first extension", sni, hostname)
 	}
 }
+
+// Test parseHTTP - verifies correct extraction of method, URL, status, and headers
+
+// Helper to create a TCPFlow with HTTP client/server data for testing parseHTTP
+func newTestFlowWithHTTPData(clientData, serverData []byte) *TCPFlow {
+	flow := &TCPFlow{
+		ID:       "test123",
+		Protocol: protocol.ProtocolHTTP,
+	}
+	if clientData != nil {
+		flow.ClientData.Write(clientData)
+	}
+	if serverData != nil {
+		flow.ServerData.Write(serverData)
+	}
+	return flow
+}
+
+func TestParseHTTP_GETRequest(t *testing.T) {
+	assembler := newTestAssembler()
+	request := []byte("GET /api/users HTTP/1.1\r\nHost: example.com\r\nUser-Agent: test/1.0\r\n\r\n")
+	flow := newTestFlowWithHTTPData(request, nil)
+
+	assembler.parseHTTP(flow)
+
+	if flow.HTTP == nil {
+		t.Fatal("parseHTTP() did not set HTTP info")
+	}
+	if flow.HTTP.Method != "GET" {
+		t.Errorf("HTTP.Method = %q, want %q", flow.HTTP.Method, "GET")
+	}
+	if flow.HTTP.URL != "/api/users" {
+		t.Errorf("HTTP.URL = %q, want %q", flow.HTTP.URL, "/api/users")
+	}
+	if flow.HTTP.Host != "example.com" {
+		t.Errorf("HTTP.Host = %q, want %q", flow.HTTP.Host, "example.com")
+	}
+}
+
+func TestParseHTTP_POSTRequest(t *testing.T) {
+	assembler := newTestAssembler()
+	request := []byte("POST /api/users HTTP/1.1\r\nHost: api.example.com\r\nContent-Type: application/json\r\nContent-Length: 27\r\n\r\n{\"name\":\"John\",\"age\":30}")
+	flow := newTestFlowWithHTTPData(request, nil)
+
+	assembler.parseHTTP(flow)
+
+	if flow.HTTP == nil {
+		t.Fatal("parseHTTP() did not set HTTP info")
+	}
+	if flow.HTTP.Method != "POST" {
+		t.Errorf("HTTP.Method = %q, want %q", flow.HTTP.Method, "POST")
+	}
+	if flow.HTTP.URL != "/api/users" {
+		t.Errorf("HTTP.URL = %q, want %q", flow.HTTP.URL, "/api/users")
+	}
+}
+
+func TestParseHTTP_ExtractsRequestHeaders(t *testing.T) {
+	assembler := newTestAssembler()
+	request := []byte("GET /api/data HTTP/1.1\r\nHost: example.com\r\nAuthorization: Bearer token123\r\nAccept: application/json\r\n\r\n")
+	flow := newTestFlowWithHTTPData(request, nil)
+
+	assembler.parseHTTP(flow)
+
+	if flow.HTTP == nil {
+		t.Fatal("parseHTTP() did not set HTTP info")
+	}
+	if flow.HTTP.RequestHeaders == nil {
+		t.Fatal("parseHTTP() did not set RequestHeaders")
+	}
+	if flow.HTTP.RequestHeaders["Authorization"] != "Bearer token123" {
+		t.Errorf("RequestHeaders[Authorization] = %q, want %q", flow.HTTP.RequestHeaders["Authorization"], "Bearer token123")
+	}
+	if flow.HTTP.RequestHeaders["Accept"] != "application/json" {
+		t.Errorf("RequestHeaders[Accept] = %q, want %q", flow.HTTP.RequestHeaders["Accept"], "application/json")
+	}
+}
+
+func TestParseHTTP_ResponseStatusCode(t *testing.T) {
+	assembler := newTestAssembler()
+	request := []byte("GET /api/users HTTP/1.1\r\nHost: example.com\r\n\r\n")
+	response := []byte("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}")
+	flow := newTestFlowWithHTTPData(request, response)
+
+	assembler.parseHTTP(flow)
+
+	if flow.HTTP == nil {
+		t.Fatal("parseHTTP() did not set HTTP info")
+	}
+	if flow.HTTP.StatusCode != 200 {
+		t.Errorf("HTTP.StatusCode = %d, want %d", flow.HTTP.StatusCode, 200)
+	}
+}
+
+func TestParseHTTP_ResponseStatusText(t *testing.T) {
+	assembler := newTestAssembler()
+	request := []byte("GET /health HTTP/1.1\r\nHost: example.com\r\n\r\n")
+	response := []byte("HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\n\r\n")
+	flow := newTestFlowWithHTTPData(request, response)
+
+	assembler.parseHTTP(flow)
+
+	if flow.HTTP == nil {
+		t.Fatal("parseHTTP() did not set HTTP info")
+	}
+	if flow.HTTP.StatusCode != 404 {
+		t.Errorf("HTTP.StatusCode = %d, want %d", flow.HTTP.StatusCode, 404)
+	}
+	// StatusText includes status code per http.Response.Status format
+	if flow.HTTP.StatusText != "404 Not Found" {
+		t.Errorf("HTTP.StatusText = %q, want %q", flow.HTTP.StatusText, "404 Not Found")
+	}
+}
+
+func TestParseHTTP_ExtractsResponseHeaders(t *testing.T) {
+	assembler := newTestAssembler()
+	request := []byte("GET /api/data HTTP/1.1\r\nHost: example.com\r\n\r\n")
+	response := []byte("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nX-Request-Id: abc123\r\n\r\n{}")
+	flow := newTestFlowWithHTTPData(request, response)
+
+	assembler.parseHTTP(flow)
+
+	if flow.HTTP == nil {
+		t.Fatal("parseHTTP() did not set HTTP info")
+	}
+	if flow.HTTP.ResponseHeaders == nil {
+		t.Fatal("parseHTTP() did not set ResponseHeaders")
+	}
+	if flow.HTTP.ResponseHeaders["X-Request-Id"] != "abc123" {
+		t.Errorf("ResponseHeaders[X-Request-Id] = %q, want %q", flow.HTTP.ResponseHeaders["X-Request-Id"], "abc123")
+	}
+}
+
+func TestParseHTTP_ExtractsContentType(t *testing.T) {
+	assembler := newTestAssembler()
+	request := []byte("GET /api/data HTTP/1.1\r\nHost: example.com\r\n\r\n")
+	response := []byte("HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\n\r\n{}")
+	flow := newTestFlowWithHTTPData(request, response)
+
+	assembler.parseHTTP(flow)
+
+	if flow.HTTP == nil {
+		t.Fatal("parseHTTP() did not set HTTP info")
+	}
+	if flow.HTTP.ContentType != "application/json; charset=utf-8" {
+		t.Errorf("HTTP.ContentType = %q, want %q", flow.HTTP.ContentType, "application/json; charset=utf-8")
+	}
+}
+
+func TestParseHTTP_ExtractsContentLength(t *testing.T) {
+	assembler := newTestAssembler()
+	request := []byte("GET /api/data HTTP/1.1\r\nHost: example.com\r\n\r\n")
+	response := []byte("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 1234\r\n\r\n")
+	flow := newTestFlowWithHTTPData(request, response)
+
+	assembler.parseHTTP(flow)
+
+	if flow.HTTP == nil {
+		t.Fatal("parseHTTP() did not set HTTP info")
+	}
+	if flow.HTTP.ContentLength != 1234 {
+		t.Errorf("HTTP.ContentLength = %d, want %d", flow.HTTP.ContentLength, 1234)
+	}
+}
+
+func TestParseHTTP_PartialRequestData_NoPanic(t *testing.T) {
+	assembler := newTestAssembler()
+	// Incomplete HTTP request - should not panic
+	partial := []byte("GET /api/users")
+	flow := newTestFlowWithHTTPData(partial, nil)
+
+	// Should not panic - gracefully handle partial data
+	assembler.parseHTTP(flow)
+
+	// HTTP may or may not be set depending on parser behavior with incomplete data
+	// Key is that no panic occurs
+}
+
+func TestParseHTTP_PartialResponseData_NoPanic(t *testing.T) {
+	assembler := newTestAssembler()
+	request := []byte("GET /api/users HTTP/1.1\r\nHost: example.com\r\n\r\n")
+	// Incomplete response - headers not terminated
+	partial := []byte("HTTP/1.1 200 OK\r\nContent-Type: application/json")
+	flow := newTestFlowWithHTTPData(request, partial)
+
+	// Should not panic - gracefully handle partial data
+	assembler.parseHTTP(flow)
+
+	// Response parsing may fail but should not panic
+}
+
+func TestParseHTTP_EmptyClientData(t *testing.T) {
+	assembler := newTestAssembler()
+	flow := newTestFlowWithHTTPData(nil, nil)
+
+	// Should not panic with empty data
+	assembler.parseHTTP(flow)
+
+	if flow.HTTP != nil {
+		t.Error("parseHTTP() should not set HTTP info for empty client data")
+	}
+}
+
+func TestParseHTTP_OnlyResponseData_NoHTTPInfo(t *testing.T) {
+	assembler := newTestAssembler()
+	// Only response data, no request - HTTP info should not be set
+	// because parseHTTP requires request to be parsed first
+	response := []byte("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{}")
+	flow := newTestFlowWithHTTPData(nil, response)
+
+	assembler.parseHTTP(flow)
+
+	// Without request data, HTTP should remain nil
+	if flow.HTTP != nil {
+		t.Error("parseHTTP() should not set HTTP info without request data")
+	}
+}
+
+func TestParseHTTP_AlreadyParsed_SkipsSecondParse(t *testing.T) {
+	assembler := newTestAssembler()
+	request := []byte("GET /original HTTP/1.1\r\nHost: example.com\r\n\r\n")
+	flow := newTestFlowWithHTTPData(request, nil)
+
+	// First parse
+	assembler.parseHTTP(flow)
+
+	if flow.HTTP == nil {
+		t.Fatal("parseHTTP() did not set HTTP info on first call")
+	}
+
+	// Modify flow data (simulating more data arriving)
+	flow.ClientData.Reset()
+	flow.ClientData.Write([]byte("POST /modified HTTP/1.1\r\nHost: example.com\r\n\r\n"))
+
+	// Second parse should be skipped since HTTP is already set
+	assembler.parseHTTP(flow)
+
+	// URL should still be from first parse
+	if flow.HTTP.URL != "/original" {
+		t.Errorf("HTTP.URL = %q, want %q (should not re-parse)", flow.HTTP.URL, "/original")
+	}
+}
+
+func TestParseHTTP_PUTRequest(t *testing.T) {
+	assembler := newTestAssembler()
+	request := []byte("PUT /api/users/123 HTTP/1.1\r\nHost: example.com\r\nContent-Type: application/json\r\n\r\n{\"name\":\"Updated\"}")
+	flow := newTestFlowWithHTTPData(request, nil)
+
+	assembler.parseHTTP(flow)
+
+	if flow.HTTP == nil {
+		t.Fatal("parseHTTP() did not set HTTP info")
+	}
+	if flow.HTTP.Method != "PUT" {
+		t.Errorf("HTTP.Method = %q, want %q", flow.HTTP.Method, "PUT")
+	}
+}
+
+func TestParseHTTP_DELETERequest(t *testing.T) {
+	assembler := newTestAssembler()
+	request := []byte("DELETE /api/users/123 HTTP/1.1\r\nHost: example.com\r\n\r\n")
+	flow := newTestFlowWithHTTPData(request, nil)
+
+	assembler.parseHTTP(flow)
+
+	if flow.HTTP == nil {
+		t.Fatal("parseHTTP() did not set HTTP info")
+	}
+	if flow.HTTP.Method != "DELETE" {
+		t.Errorf("HTTP.Method = %q, want %q", flow.HTTP.Method, "DELETE")
+	}
+}
+
+func TestParseHTTP_MultipleHeaderValues(t *testing.T) {
+	assembler := newTestAssembler()
+	// Multiple Set-Cookie headers are common in responses
+	request := []byte("GET /login HTTP/1.1\r\nHost: example.com\r\n\r\n")
+	response := []byte("HTTP/1.1 200 OK\r\nSet-Cookie: session=abc123\r\nSet-Cookie: user=john\r\n\r\n")
+	flow := newTestFlowWithHTTPData(request, response)
+
+	assembler.parseHTTP(flow)
+
+	if flow.HTTP == nil {
+		t.Fatal("parseHTTP() did not set HTTP info")
+	}
+	// Headers with multiple values are joined by ", "
+	setCookie := flow.HTTP.ResponseHeaders["Set-Cookie"]
+	if setCookie == "" {
+		t.Error("ResponseHeaders[Set-Cookie] should not be empty")
+	}
+	// Should contain both cookie values
+	if !(contains(setCookie, "session=abc123") && contains(setCookie, "user=john")) {
+		t.Errorf("ResponseHeaders[Set-Cookie] = %q, should contain both cookie values", setCookie)
+	}
+}
+
+// Helper function for checking substrings
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsString(s, substr))
+}
+
+func containsString(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}
+
+func TestParseHTTP_5xxResponse(t *testing.T) {
+	assembler := newTestAssembler()
+	request := []byte("GET /api/data HTTP/1.1\r\nHost: example.com\r\n\r\n")
+	response := []byte("HTTP/1.1 500 Internal Server Error\r\nContent-Type: text/plain\r\n\r\nError")
+	flow := newTestFlowWithHTTPData(request, response)
+
+	assembler.parseHTTP(flow)
+
+	if flow.HTTP == nil {
+		t.Fatal("parseHTTP() did not set HTTP info")
+	}
+	if flow.HTTP.StatusCode != 500 {
+		t.Errorf("HTTP.StatusCode = %d, want %d", flow.HTTP.StatusCode, 500)
+	}
+}
+
+func TestParseHTTP_3xxRedirectResponse(t *testing.T) {
+	assembler := newTestAssembler()
+	request := []byte("GET /old-path HTTP/1.1\r\nHost: example.com\r\n\r\n")
+	response := []byte("HTTP/1.1 301 Moved Permanently\r\nLocation: /new-path\r\n\r\n")
+	flow := newTestFlowWithHTTPData(request, response)
+
+	assembler.parseHTTP(flow)
+
+	if flow.HTTP == nil {
+		t.Fatal("parseHTTP() did not set HTTP info")
+	}
+	if flow.HTTP.StatusCode != 301 {
+		t.Errorf("HTTP.StatusCode = %d, want %d", flow.HTTP.StatusCode, 301)
+	}
+	if flow.HTTP.ResponseHeaders["Location"] != "/new-path" {
+		t.Errorf("ResponseHeaders[Location] = %q, want %q", flow.HTTP.ResponseHeaders["Location"], "/new-path")
+	}
+}
+
+func TestParseHTTP_BinaryPayloadDoesNotCrash(t *testing.T) {
+	assembler := newTestAssembler()
+	// Binary data that looks nothing like HTTP
+	binaryData := []byte{0x00, 0x01, 0x02, 0xFF, 0xFE, 0xAB, 0xCD, 0xEF, 0x89, 0x90}
+	flow := newTestFlowWithHTTPData(binaryData, nil)
+
+	// Should not panic with non-HTTP binary data
+	assembler.parseHTTP(flow)
+
+	// HTTP should remain nil since data doesn't parse as HTTP
+	if flow.HTTP != nil {
+		t.Error("parseHTTP() should not set HTTP info for binary data")
+	}
+}
+
+func TestParseHTTP_URLWithQueryString(t *testing.T) {
+	assembler := newTestAssembler()
+	request := []byte("GET /search?q=test&page=1 HTTP/1.1\r\nHost: example.com\r\n\r\n")
+	flow := newTestFlowWithHTTPData(request, nil)
+
+	assembler.parseHTTP(flow)
+
+	if flow.HTTP == nil {
+		t.Fatal("parseHTTP() did not set HTTP info")
+	}
+	if flow.HTTP.URL != "/search?q=test&page=1" {
+		t.Errorf("HTTP.URL = %q, want %q", flow.HTTP.URL, "/search?q=test&page=1")
+	}
+}
