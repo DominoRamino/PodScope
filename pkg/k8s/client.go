@@ -18,7 +18,7 @@ import (
 
 // Client wraps the Kubernetes clientset
 type Client struct {
-	clientset  *kubernetes.Clientset
+	clientset  kubernetes.Interface
 	restConfig *rest.Config
 }
 
@@ -111,7 +111,7 @@ func (c *Client) GetPodsBySelector(ctx context.Context, namespace, selector stri
 }
 
 // Clientset returns the underlying Kubernetes clientset
-func (c *Client) Clientset() *kubernetes.Clientset {
+func (c *Client) Clientset() kubernetes.Interface {
 	return c.clientset
 }
 
