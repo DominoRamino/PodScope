@@ -545,8 +545,23 @@ func (s *Session) Cleanup(ctx context.Context) error {
 		close(s.stopChan)
 	}
 
-	// Delete the session namespace (this cascades to all resources)
-	err := s.client.clientset.CoreV1().Namespaces().Delete(ctx, s.namespace, metav1.DeleteOptions{})
+	// Clean up cluster-scoped RBAC resources (not deleted by namespace cascade)
+	rbacName := fmt.Sprintf("podscope-hub-%s", s.id)
+
+	// Delete ClusterRoleBinding first (depends on ClusterRole)
+	err := s.client.clientset.RbacV1().ClusterRoleBindings().Delete(ctx, rbacName, metav1.DeleteOptions{})
+	if err != nil && !errors.IsNotFound(err) {
+		fmt.Fprintf(os.Stderr, "Warning: failed to delete ClusterRoleBinding %s: %v\n", rbacName, err)
+	}
+
+	// Delete ClusterRole after ClusterRoleBinding
+	err = s.client.clientset.RbacV1().ClusterRoles().Delete(ctx, rbacName, metav1.DeleteOptions{})
+	if err != nil && !errors.IsNotFound(err) {
+		fmt.Fprintf(os.Stderr, "Warning: failed to delete ClusterRole %s: %v\n", rbacName, err)
+	}
+
+	// Delete the session namespace (this cascades to namespace-scoped resources)
+	err = s.client.clientset.CoreV1().Namespaces().Delete(ctx, s.namespace, metav1.DeleteOptions{})
 	if err != nil && !errors.IsNotFound(err) {
 		return fmt.Errorf("failed to delete namespace: %w", err)
 	}
