@@ -3,6 +3,7 @@ package k8s
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -951,5 +952,730 @@ func TestDeployHub_AllResourcesCreated(t *testing.T) {
 	_, err = ts.fakeClientset.CoreV1().Services(ts.namespace).Get(ctx, "podscope-hub", metav1.GetOptions{})
 	if err != nil {
 		t.Errorf("Service not created: %v", err)
+	}
+}
+
+// injectAgent is a test version that uses the fake clientset
+func (ts *testSession) injectAgent(ctx context.Context, target PodTarget, privileged bool) error {
+	// Get the current pod
+	pod, err := ts.fakeClientset.CoreV1().Pods(target.Namespace).Get(ctx, target.Name, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to get pod: %w", err)
+	}
+
+	// Check if a podscope agent is already RUNNING in this pod
+	for _, ec := range pod.Spec.EphemeralContainers {
+		if strings.HasPrefix(ec.Name, "podscope-agent") {
+			// Check container status - only block if still running
+			for _, status := range pod.Status.EphemeralContainerStatuses {
+				if status.Name == ec.Name && status.State.Running != nil {
+					return fmt.Errorf("agent %s already running in pod", ec.Name)
+				}
+			}
+		}
+	}
+
+	// Create the ephemeral container spec with unique name per session
+	agentName := fmt.Sprintf("podscope-agent-%s", ts.id)
+
+	securityContext := &corev1.SecurityContext{
+		Capabilities: &corev1.Capabilities{
+			Add: []corev1.Capability{"NET_RAW"},
+		},
+	}
+
+	if privileged {
+		t := true
+		securityContext.Privileged = &t
+	}
+
+	hubAddress := fmt.Sprintf("%s.%s.svc.cluster.local:9090", ts.hubService, ts.namespace)
+
+	ephemeralContainer := corev1.EphemeralContainer{
+		EphemeralContainerCommon: corev1.EphemeralContainerCommon{
+			Name:            agentName,
+			Image:           GetAgentImage(),
+			ImagePullPolicy: corev1.PullIfNotPresent,
+			SecurityContext: securityContext,
+			Env: []corev1.EnvVar{
+				{
+					Name:  "HUB_ADDRESS",
+					Value: hubAddress,
+				},
+				{
+					Name:  "POD_NAME",
+					Value: target.Name,
+				},
+				{
+					Name:  "POD_NAMESPACE",
+					Value: target.Namespace,
+				},
+				{
+					Name:  "POD_IP",
+					Value: target.IP,
+				},
+				{
+					Name:  "SESSION_ID",
+					Value: ts.id,
+				},
+				{
+					Name:  "INTERFACE",
+					Value: "eth0",
+				},
+			},
+		},
+	}
+
+	// Update the pod with the ephemeral container
+	pod.Spec.EphemeralContainers = append(pod.Spec.EphemeralContainers, ephemeralContainer)
+
+	_, err = ts.fakeClientset.CoreV1().Pods(target.Namespace).UpdateEphemeralContainers(
+		ctx,
+		target.Name,
+		pod,
+		metav1.UpdateOptions{},
+	)
+	if err != nil {
+		return fmt.Errorf("failed to inject ephemeral container: %w", err)
+	}
+
+	return nil
+}
+
+// createTestPod creates a running pod for testing agent injection
+func createTestPod(t *testing.T, ts *testSession, ctx context.Context, name, namespace, ip string) {
+	t.Helper()
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+		},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{
+				{
+					Name:  "app",
+					Image: "nginx:latest",
+				},
+			},
+		},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+			PodIP: ip,
+		},
+	}
+
+	_, err := ts.fakeClientset.CoreV1().Pods(namespace).Create(ctx, pod, metav1.CreateOptions{})
+	if err != nil {
+		t.Fatalf("failed to create test pod: %v", err)
+	}
+}
+
+// TestInjectAgent_EphemeralContainerAdded tests that ephemeral container is added to pod spec
+func TestInjectAgent_EphemeralContainerAdded(t *testing.T) {
+	sessionID := "inj12345"
+	ts := createTestSession(t, sessionID)
+	ctx := context.Background()
+
+	podName := "target-pod"
+	podNamespace := "default"
+	podIP := "10.0.0.100"
+
+	// Create a target pod
+	createTestPod(t, ts, ctx, podName, podNamespace, podIP)
+
+	target := PodTarget{
+		Name:      podName,
+		Namespace: podNamespace,
+		IP:        podIP,
+	}
+
+	err := ts.injectAgent(ctx, target, false)
+	if err != nil {
+		t.Fatalf("injectAgent failed: %v", err)
+	}
+
+	// Verify ephemeral container was added
+	pod, err := ts.fakeClientset.CoreV1().Pods(podNamespace).Get(ctx, podName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("failed to get pod: %v", err)
+	}
+
+	if len(pod.Spec.EphemeralContainers) != 1 {
+		t.Errorf("expected 1 ephemeral container, got %d", len(pod.Spec.EphemeralContainers))
+	}
+}
+
+// TestInjectAgent_ContainerNameFormat tests that container name is podscope-agent-{session-id}
+func TestInjectAgent_ContainerNameFormat(t *testing.T) {
+	sessionID := "nm123456"
+	ts := createTestSession(t, sessionID)
+	ctx := context.Background()
+
+	podName := "target-pod"
+	podNamespace := "default"
+	podIP := "10.0.0.101"
+
+	createTestPod(t, ts, ctx, podName, podNamespace, podIP)
+
+	target := PodTarget{
+		Name:      podName,
+		Namespace: podNamespace,
+		IP:        podIP,
+	}
+
+	err := ts.injectAgent(ctx, target, false)
+	if err != nil {
+		t.Fatalf("injectAgent failed: %v", err)
+	}
+
+	pod, err := ts.fakeClientset.CoreV1().Pods(podNamespace).Get(ctx, podName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("failed to get pod: %v", err)
+	}
+
+	expectedName := fmt.Sprintf("podscope-agent-%s", sessionID)
+	if len(pod.Spec.EphemeralContainers) < 1 {
+		t.Fatal("no ephemeral containers found")
+	}
+
+	containerName := pod.Spec.EphemeralContainers[0].Name
+	if containerName != expectedName {
+		t.Errorf("container name = %q, want %q", containerName, expectedName)
+	}
+}
+
+// TestInjectAgent_NetRawCapabilitySet tests that NET_RAW capability is set by default
+func TestInjectAgent_NetRawCapabilitySet(t *testing.T) {
+	sessionID := "nr123456"
+	ts := createTestSession(t, sessionID)
+	ctx := context.Background()
+
+	podName := "target-pod"
+	podNamespace := "default"
+	podIP := "10.0.0.102"
+
+	createTestPod(t, ts, ctx, podName, podNamespace, podIP)
+
+	target := PodTarget{
+		Name:      podName,
+		Namespace: podNamespace,
+		IP:        podIP,
+	}
+
+	// Inject without privileged flag
+	err := ts.injectAgent(ctx, target, false)
+	if err != nil {
+		t.Fatalf("injectAgent failed: %v", err)
+	}
+
+	pod, err := ts.fakeClientset.CoreV1().Pods(podNamespace).Get(ctx, podName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("failed to get pod: %v", err)
+	}
+
+	if len(pod.Spec.EphemeralContainers) < 1 {
+		t.Fatal("no ephemeral containers found")
+	}
+
+	ec := pod.Spec.EphemeralContainers[0]
+	if ec.SecurityContext == nil {
+		t.Fatal("SecurityContext is nil")
+	}
+	if ec.SecurityContext.Capabilities == nil {
+		t.Fatal("Capabilities is nil")
+	}
+
+	hasNetRaw := false
+	for _, cap := range ec.SecurityContext.Capabilities.Add {
+		if cap == "NET_RAW" {
+			hasNetRaw = true
+			break
+		}
+	}
+
+	if !hasNetRaw {
+		t.Error("NET_RAW capability not found in Add list")
+	}
+}
+
+// TestInjectAgent_PrivilegedFlagSetsPrivileged tests that privileged flag sets container as privileged
+func TestInjectAgent_PrivilegedFlagSetsPrivileged(t *testing.T) {
+	sessionID := "pr123456"
+	ts := createTestSession(t, sessionID)
+	ctx := context.Background()
+
+	podName := "target-pod"
+	podNamespace := "default"
+	podIP := "10.0.0.103"
+
+	createTestPod(t, ts, ctx, podName, podNamespace, podIP)
+
+	target := PodTarget{
+		Name:      podName,
+		Namespace: podNamespace,
+		IP:        podIP,
+	}
+
+	// Inject with privileged flag
+	err := ts.injectAgent(ctx, target, true)
+	if err != nil {
+		t.Fatalf("injectAgent failed: %v", err)
+	}
+
+	pod, err := ts.fakeClientset.CoreV1().Pods(podNamespace).Get(ctx, podName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("failed to get pod: %v", err)
+	}
+
+	if len(pod.Spec.EphemeralContainers) < 1 {
+		t.Fatal("no ephemeral containers found")
+	}
+
+	ec := pod.Spec.EphemeralContainers[0]
+	if ec.SecurityContext == nil {
+		t.Fatal("SecurityContext is nil")
+	}
+	if ec.SecurityContext.Privileged == nil || !*ec.SecurityContext.Privileged {
+		t.Error("Privileged flag not set to true")
+	}
+}
+
+// TestInjectAgent_HubAddressEnvVar tests that HUB_ADDRESS environment variable is set to service DNS name
+func TestInjectAgent_HubAddressEnvVar(t *testing.T) {
+	sessionID := "ha123456"
+	ts := createTestSession(t, sessionID)
+	ctx := context.Background()
+
+	podName := "target-pod"
+	podNamespace := "default"
+	podIP := "10.0.0.104"
+
+	createTestPod(t, ts, ctx, podName, podNamespace, podIP)
+
+	target := PodTarget{
+		Name:      podName,
+		Namespace: podNamespace,
+		IP:        podIP,
+	}
+
+	err := ts.injectAgent(ctx, target, false)
+	if err != nil {
+		t.Fatalf("injectAgent failed: %v", err)
+	}
+
+	pod, err := ts.fakeClientset.CoreV1().Pods(podNamespace).Get(ctx, podName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("failed to get pod: %v", err)
+	}
+
+	if len(pod.Spec.EphemeralContainers) < 1 {
+		t.Fatal("no ephemeral containers found")
+	}
+
+	ec := pod.Spec.EphemeralContainers[0]
+	expectedHubAddr := fmt.Sprintf("%s.%s.svc.cluster.local:9090", ts.hubService, ts.namespace)
+
+	var hubAddrValue string
+	for _, env := range ec.Env {
+		if env.Name == "HUB_ADDRESS" {
+			hubAddrValue = env.Value
+			break
+		}
+	}
+
+	if hubAddrValue == "" {
+		t.Error("HUB_ADDRESS environment variable not found")
+	} else if hubAddrValue != expectedHubAddr {
+		t.Errorf("HUB_ADDRESS = %q, want %q", hubAddrValue, expectedHubAddr)
+	}
+}
+
+// TestInjectAgent_PodNameEnvVar tests that POD_NAME environment variable is set
+func TestInjectAgent_PodNameEnvVar(t *testing.T) {
+	sessionID := "pn123456"
+	ts := createTestSession(t, sessionID)
+	ctx := context.Background()
+
+	podName := "my-target-pod"
+	podNamespace := "default"
+	podIP := "10.0.0.105"
+
+	createTestPod(t, ts, ctx, podName, podNamespace, podIP)
+
+	target := PodTarget{
+		Name:      podName,
+		Namespace: podNamespace,
+		IP:        podIP,
+	}
+
+	err := ts.injectAgent(ctx, target, false)
+	if err != nil {
+		t.Fatalf("injectAgent failed: %v", err)
+	}
+
+	pod, err := ts.fakeClientset.CoreV1().Pods(podNamespace).Get(ctx, podName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("failed to get pod: %v", err)
+	}
+
+	if len(pod.Spec.EphemeralContainers) < 1 {
+		t.Fatal("no ephemeral containers found")
+	}
+
+	ec := pod.Spec.EphemeralContainers[0]
+	var podNameValue string
+	for _, env := range ec.Env {
+		if env.Name == "POD_NAME" {
+			podNameValue = env.Value
+			break
+		}
+	}
+
+	if podNameValue == "" {
+		t.Error("POD_NAME environment variable not found")
+	} else if podNameValue != podName {
+		t.Errorf("POD_NAME = %q, want %q", podNameValue, podName)
+	}
+}
+
+// TestInjectAgent_PodNamespaceEnvVar tests that POD_NAMESPACE environment variable is set
+func TestInjectAgent_PodNamespaceEnvVar(t *testing.T) {
+	sessionID := "pns12345"
+	ts := createTestSession(t, sessionID)
+	ctx := context.Background()
+
+	podName := "target-pod"
+	podNamespace := "my-namespace"
+	podIP := "10.0.0.106"
+
+	createTestPod(t, ts, ctx, podName, podNamespace, podIP)
+
+	target := PodTarget{
+		Name:      podName,
+		Namespace: podNamespace,
+		IP:        podIP,
+	}
+
+	err := ts.injectAgent(ctx, target, false)
+	if err != nil {
+		t.Fatalf("injectAgent failed: %v", err)
+	}
+
+	pod, err := ts.fakeClientset.CoreV1().Pods(podNamespace).Get(ctx, podName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("failed to get pod: %v", err)
+	}
+
+	if len(pod.Spec.EphemeralContainers) < 1 {
+		t.Fatal("no ephemeral containers found")
+	}
+
+	ec := pod.Spec.EphemeralContainers[0]
+	var podNsValue string
+	for _, env := range ec.Env {
+		if env.Name == "POD_NAMESPACE" {
+			podNsValue = env.Value
+			break
+		}
+	}
+
+	if podNsValue == "" {
+		t.Error("POD_NAMESPACE environment variable not found")
+	} else if podNsValue != podNamespace {
+		t.Errorf("POD_NAMESPACE = %q, want %q", podNsValue, podNamespace)
+	}
+}
+
+// TestInjectAgent_PodIPEnvVar tests that POD_IP environment variable is set
+func TestInjectAgent_PodIPEnvVar(t *testing.T) {
+	sessionID := "pip12345"
+	ts := createTestSession(t, sessionID)
+	ctx := context.Background()
+
+	podName := "target-pod"
+	podNamespace := "default"
+	podIP := "10.99.88.77"
+
+	createTestPod(t, ts, ctx, podName, podNamespace, podIP)
+
+	target := PodTarget{
+		Name:      podName,
+		Namespace: podNamespace,
+		IP:        podIP,
+	}
+
+	err := ts.injectAgent(ctx, target, false)
+	if err != nil {
+		t.Fatalf("injectAgent failed: %v", err)
+	}
+
+	pod, err := ts.fakeClientset.CoreV1().Pods(podNamespace).Get(ctx, podName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("failed to get pod: %v", err)
+	}
+
+	if len(pod.Spec.EphemeralContainers) < 1 {
+		t.Fatal("no ephemeral containers found")
+	}
+
+	ec := pod.Spec.EphemeralContainers[0]
+	var podIPValue string
+	for _, env := range ec.Env {
+		if env.Name == "POD_IP" {
+			podIPValue = env.Value
+			break
+		}
+	}
+
+	if podIPValue == "" {
+		t.Error("POD_IP environment variable not found")
+	} else if podIPValue != podIP {
+		t.Errorf("POD_IP = %q, want %q", podIPValue, podIP)
+	}
+}
+
+// TestInjectAgent_AllEnvVarsPresent tests that all required environment variables are set
+func TestInjectAgent_AllEnvVarsPresent(t *testing.T) {
+	sessionID := "all12345"
+	ts := createTestSession(t, sessionID)
+	ctx := context.Background()
+
+	podName := "target-pod"
+	podNamespace := "default"
+	podIP := "10.0.0.200"
+
+	createTestPod(t, ts, ctx, podName, podNamespace, podIP)
+
+	target := PodTarget{
+		Name:      podName,
+		Namespace: podNamespace,
+		IP:        podIP,
+	}
+
+	err := ts.injectAgent(ctx, target, false)
+	if err != nil {
+		t.Fatalf("injectAgent failed: %v", err)
+	}
+
+	pod, err := ts.fakeClientset.CoreV1().Pods(podNamespace).Get(ctx, podName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("failed to get pod: %v", err)
+	}
+
+	if len(pod.Spec.EphemeralContainers) < 1 {
+		t.Fatal("no ephemeral containers found")
+	}
+
+	ec := pod.Spec.EphemeralContainers[0]
+	requiredEnvVars := []string{"HUB_ADDRESS", "POD_NAME", "POD_NAMESPACE", "POD_IP", "SESSION_ID", "INTERFACE"}
+
+	envMap := make(map[string]string)
+	for _, env := range ec.Env {
+		envMap[env.Name] = env.Value
+	}
+
+	for _, required := range requiredEnvVars {
+		if _, ok := envMap[required]; !ok {
+			t.Errorf("required environment variable %q not found", required)
+		}
+	}
+}
+
+// TestInjectAgent_ErrorIfPodNotFound tests that error is returned for non-existent pod
+func TestInjectAgent_ErrorIfPodNotFound(t *testing.T) {
+	sessionID := "nf123456"
+	ts := createTestSession(t, sessionID)
+	ctx := context.Background()
+
+	target := PodTarget{
+		Name:      "non-existent-pod",
+		Namespace: "default",
+		IP:        "10.0.0.999",
+	}
+
+	err := ts.injectAgent(ctx, target, false)
+	if err == nil {
+		t.Error("expected error for non-existent pod, got nil")
+	}
+}
+
+// TestInjectAgent_ErrorIfAgentAlreadyRunning tests that error is returned if agent is already running
+func TestInjectAgent_ErrorIfAgentAlreadyRunning(t *testing.T) {
+	sessionID := "ar123456"
+	ts := createTestSession(t, sessionID)
+	ctx := context.Background()
+
+	podName := "target-pod"
+	podNamespace := "default"
+	podIP := "10.0.0.201"
+
+	// Create a pod with an existing running ephemeral container
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      podName,
+			Namespace: podNamespace,
+		},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{
+				{
+					Name:  "app",
+					Image: "nginx:latest",
+				},
+			},
+			EphemeralContainers: []corev1.EphemeralContainer{
+				{
+					EphemeralContainerCommon: corev1.EphemeralContainerCommon{
+						Name:  "podscope-agent-existing",
+						Image: "podscope-agent:v1",
+					},
+				},
+			},
+		},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+			PodIP: podIP,
+			EphemeralContainerStatuses: []corev1.ContainerStatus{
+				{
+					Name: "podscope-agent-existing",
+					State: corev1.ContainerState{
+						Running: &corev1.ContainerStateRunning{},
+					},
+				},
+			},
+		},
+	}
+
+	_, err := ts.fakeClientset.CoreV1().Pods(podNamespace).Create(ctx, pod, metav1.CreateOptions{})
+	if err != nil {
+		t.Fatalf("failed to create test pod: %v", err)
+	}
+
+	target := PodTarget{
+		Name:      podName,
+		Namespace: podNamespace,
+		IP:        podIP,
+	}
+
+	err = ts.injectAgent(ctx, target, false)
+	if err == nil {
+		t.Error("expected error for already running agent, got nil")
+	}
+	if !strings.Contains(err.Error(), "already running") {
+		t.Errorf("expected error message to contain 'already running', got: %v", err)
+	}
+}
+
+// TestInjectAgent_OkIfTerminatedAgentExists tests that injection succeeds if previous agent terminated
+func TestInjectAgent_OkIfTerminatedAgentExists(t *testing.T) {
+	sessionID := "te123456"
+	ts := createTestSession(t, sessionID)
+	ctx := context.Background()
+
+	podName := "target-pod"
+	podNamespace := "default"
+	podIP := "10.0.0.202"
+
+	// Create a pod with an existing terminated ephemeral container
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      podName,
+			Namespace: podNamespace,
+		},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{
+				{
+					Name:  "app",
+					Image: "nginx:latest",
+				},
+			},
+			EphemeralContainers: []corev1.EphemeralContainer{
+				{
+					EphemeralContainerCommon: corev1.EphemeralContainerCommon{
+						Name:  "podscope-agent-old",
+						Image: "podscope-agent:v1",
+					},
+				},
+			},
+		},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+			PodIP: podIP,
+			EphemeralContainerStatuses: []corev1.ContainerStatus{
+				{
+					Name: "podscope-agent-old",
+					State: corev1.ContainerState{
+						Terminated: &corev1.ContainerStateTerminated{
+							ExitCode: 0,
+						},
+					},
+				},
+			},
+		},
+	}
+
+	_, err := ts.fakeClientset.CoreV1().Pods(podNamespace).Create(ctx, pod, metav1.CreateOptions{})
+	if err != nil {
+		t.Fatalf("failed to create test pod: %v", err)
+	}
+
+	target := PodTarget{
+		Name:      podName,
+		Namespace: podNamespace,
+		IP:        podIP,
+	}
+
+	// Should succeed because existing agent is terminated
+	err = ts.injectAgent(ctx, target, false)
+	if err != nil {
+		t.Errorf("expected injection to succeed with terminated agent, got: %v", err)
+	}
+
+	// Verify new container was added
+	pod, err = ts.fakeClientset.CoreV1().Pods(podNamespace).Get(ctx, podName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("failed to get pod: %v", err)
+	}
+
+	if len(pod.Spec.EphemeralContainers) != 2 {
+		t.Errorf("expected 2 ephemeral containers (old + new), got %d", len(pod.Spec.EphemeralContainers))
+	}
+}
+
+// TestInjectAgent_UsesCorrectAgentImage tests that the container uses the correct agent image
+func TestInjectAgent_UsesCorrectAgentImage(t *testing.T) {
+	sessionID := "img12345"
+	ts := createTestSession(t, sessionID)
+	ctx := context.Background()
+
+	podName := "target-pod"
+	podNamespace := "default"
+	podIP := "10.0.0.203"
+
+	createTestPod(t, ts, ctx, podName, podNamespace, podIP)
+
+	target := PodTarget{
+		Name:      podName,
+		Namespace: podNamespace,
+		IP:        podIP,
+	}
+
+	err := ts.injectAgent(ctx, target, false)
+	if err != nil {
+		t.Fatalf("injectAgent failed: %v", err)
+	}
+
+	pod, err := ts.fakeClientset.CoreV1().Pods(podNamespace).Get(ctx, podName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("failed to get pod: %v", err)
+	}
+
+	if len(pod.Spec.EphemeralContainers) < 1 {
+		t.Fatal("no ephemeral containers found")
+	}
+
+	ec := pod.Spec.EphemeralContainers[0]
+	expectedImage := GetAgentImage()
+	if ec.Image != expectedImage {
+		t.Errorf("image = %q, want %q", ec.Image, expectedImage)
 	}
 }
