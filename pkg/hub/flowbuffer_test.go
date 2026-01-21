@@ -528,3 +528,186 @@ func TestGet_AfterEviction(t *testing.T) {
 		t.Error("expected flow-3 to be retrievable")
 	}
 }
+
+// Tests for US-004: FlowRingBuffer Clear() method
+
+func TestClear_ResetsHeadToZero(t *testing.T) {
+	rb := NewFlowRingBuffer(10)
+
+	// Add some flows to move the head pointer
+	rb.Add(createTestFlow("flow-1"))
+	rb.Add(createTestFlow("flow-2"))
+	rb.Add(createTestFlow("flow-3"))
+
+	// Verify head has moved (should be 3)
+	if rb.head == 0 {
+		t.Fatal("setup failed: head should not be 0 after adding flows")
+	}
+
+	rb.Clear()
+
+	if rb.head != 0 {
+		t.Errorf("expected head to be 0 after Clear(), got %d", rb.head)
+	}
+}
+
+func TestClear_ResetsSizeToZero(t *testing.T) {
+	rb := NewFlowRingBuffer(10)
+
+	// Add some flows
+	rb.Add(createTestFlow("flow-1"))
+	rb.Add(createTestFlow("flow-2"))
+	rb.Add(createTestFlow("flow-3"))
+
+	// Verify size is not 0
+	if rb.Size() != 3 {
+		t.Fatalf("setup failed: expected size 3, got %d", rb.Size())
+	}
+
+	rb.Clear()
+
+	if rb.Size() != 0 {
+		t.Errorf("expected size to be 0 after Clear(), got %d", rb.Size())
+	}
+}
+
+func TestClear_ClearsIndexMap(t *testing.T) {
+	rb := NewFlowRingBuffer(10)
+
+	// Add flows
+	rb.Add(createTestFlow("flow-1"))
+	rb.Add(createTestFlow("flow-2"))
+	rb.Add(createTestFlow("flow-3"))
+
+	// Verify flows are retrievable
+	if rb.Get("flow-1") == nil || rb.Get("flow-2") == nil || rb.Get("flow-3") == nil {
+		t.Fatal("setup failed: flows should be retrievable before Clear()")
+	}
+
+	rb.Clear()
+
+	// Index map should be cleared - all lookups return nil
+	if rb.Get("flow-1") != nil {
+		t.Error("expected flow-1 to be nil after Clear()")
+	}
+	if rb.Get("flow-2") != nil {
+		t.Error("expected flow-2 to be nil after Clear()")
+	}
+	if rb.Get("flow-3") != nil {
+		t.Error("expected flow-3 to be nil after Clear()")
+	}
+
+	// Also verify by checking internal index length
+	rb.mutex.RLock()
+	indexLen := len(rb.index)
+	rb.mutex.RUnlock()
+
+	if indexLen != 0 {
+		t.Errorf("expected index map length 0 after Clear(), got %d", indexLen)
+	}
+}
+
+func TestClear_GetAllReturnsEmptySlice(t *testing.T) {
+	rb := NewFlowRingBuffer(10)
+
+	// Add some flows
+	rb.Add(createTestFlow("flow-1"))
+	rb.Add(createTestFlow("flow-2"))
+	rb.Add(createTestFlow("flow-3"))
+
+	// Verify flows exist
+	if len(rb.GetAll()) != 3 {
+		t.Fatal("setup failed: expected 3 flows before Clear()")
+	}
+
+	rb.Clear()
+
+	flows := rb.GetAll()
+
+	if flows == nil {
+		t.Error("expected GetAll() to return non-nil slice after Clear(), got nil")
+	}
+	if len(flows) != 0 {
+		t.Errorf("expected empty slice after Clear(), got %d flows", len(flows))
+	}
+}
+
+func TestClear_AllowsNewInsertionsAfter(t *testing.T) {
+	rb := NewFlowRingBuffer(10)
+
+	// Add initial flows
+	rb.Add(createTestFlow("old-1"))
+	rb.Add(createTestFlow("old-2"))
+
+	rb.Clear()
+
+	// Add new flows after clear
+	rb.Add(createTestFlow("new-1"))
+	rb.Add(createTestFlow("new-2"))
+
+	if rb.Size() != 2 {
+		t.Errorf("expected size 2 after adding new flows, got %d", rb.Size())
+	}
+
+	// Old flows should not be accessible
+	if rb.Get("old-1") != nil {
+		t.Error("expected old-1 to be nil after Clear()")
+	}
+	if rb.Get("old-2") != nil {
+		t.Error("expected old-2 to be nil after Clear()")
+	}
+
+	// New flows should be accessible
+	if rb.Get("new-1") == nil {
+		t.Error("expected new-1 to be retrievable")
+	}
+	if rb.Get("new-2") == nil {
+		t.Error("expected new-2 to be retrievable")
+	}
+
+	// GetAll should return new flows in order
+	flows := rb.GetAll()
+	if len(flows) != 2 {
+		t.Fatalf("expected 2 flows from GetAll(), got %d", len(flows))
+	}
+	if flows[0].ID != "new-1" || flows[1].ID != "new-2" {
+		t.Errorf("unexpected flow order: got %s, %s", flows[0].ID, flows[1].ID)
+	}
+}
+
+func TestClear_AfterWrapAround(t *testing.T) {
+	// Test Clear() works correctly even after buffer has wrapped around
+	capacity := 3
+	rb := NewFlowRingBuffer(capacity)
+
+	// Add more flows than capacity to force wrap-around
+	rb.Add(createTestFlow("flow-1")) // Evicted
+	rb.Add(createTestFlow("flow-2")) // Evicted
+	rb.Add(createTestFlow("flow-3"))
+	rb.Add(createTestFlow("flow-4"))
+	rb.Add(createTestFlow("flow-5"))
+
+	// Head should have wrapped around
+	if rb.Size() != 3 {
+		t.Fatalf("setup failed: expected size 3, got %d", rb.Size())
+	}
+
+	rb.Clear()
+
+	// All state should be reset
+	if rb.head != 0 {
+		t.Errorf("expected head 0 after Clear(), got %d", rb.head)
+	}
+	if rb.Size() != 0 {
+		t.Errorf("expected size 0 after Clear(), got %d", rb.Size())
+	}
+	if len(rb.GetAll()) != 0 {
+		t.Error("expected empty flows after Clear()")
+	}
+
+	// Should be able to add new flows normally
+	rb.Add(createTestFlow("after-clear"))
+	if rb.Get("after-clear") == nil {
+		t.Error("expected to retrieve flow added after Clear()")
+	}
+}
