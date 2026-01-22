@@ -1,8 +1,8 @@
-import { Flow, Protocol } from '../types'
+import { Flow } from '../types'
 import { ArrowRight, Lock, Server } from 'lucide-react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { useRef, memo } from 'react'
-import { formatBytes, formatTime } from '../utils'
+import { formatBytes, formatTime, getProtocolColor, getStatusColor } from '../utils'
 
 interface FlowListProps {
   flows: Flow[]
@@ -91,37 +91,6 @@ interface FlowRowProps {
 
 // Memoized FlowRow to prevent unnecessary re-renders
 const FlowRowMemo = memo(function FlowRow({ flow, selected, onClick }: FlowRowProps) {
-  const getProtocolColor = (protocol: Protocol): string => {
-    switch (protocol) {
-      case 'HTTP':
-        return 'text-green-400 bg-green-400/10'
-      case 'HTTPS':
-      case 'TLS':
-        return 'text-yellow-400 bg-yellow-400/10'
-      default:
-        return 'text-blue-400 bg-blue-400/10'
-    }
-  }
-
-  const getStatusColor = (status: string, httpCode?: number): string => {
-    if (httpCode) {
-      if (httpCode >= 200 && httpCode < 300) return 'text-green-400'
-      if (httpCode >= 300 && httpCode < 400) return 'text-blue-400'
-      if (httpCode >= 400 && httpCode < 500) return 'text-yellow-400'
-      if (httpCode >= 500) return 'text-red-400'
-    }
-    switch (status) {
-      case 'CLOSED':
-        return 'text-green-400'
-      case 'RESET':
-        return 'text-red-400'
-      case 'TIMEOUT':
-        return 'text-yellow-400'
-      default:
-        return 'text-blue-400'
-    }
-  }
-
   const getDisplayStatus = (): string => {
     if (flow.http?.statusCode) {
       return `${flow.http.statusCode}`
