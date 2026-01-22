@@ -1094,6 +1094,80 @@ func TestHandleBPFFilter_PUT_Returns405(t *testing.T) {
 	}
 }
 
+// TestHandleBPFFilter_POST_DoesNotAddHubExclusion verifies hub does NOT add hub exclusion
+// The agent is responsible for combining the user filter with hub exclusion
+func TestHandleBPFFilter_POST_DoesNotAddHubExclusion(t *testing.T) {
+	s := setupTestServer(t)
+	defer s.pcapBuffer.Close()
+
+	testCases := []struct {
+		name       string
+		userFilter string
+	}{
+		{"simple filter", "tcp port 80"},
+		{"complex filter", "tcp port 80 or tcp port 443"},
+		{"exclude dns", "not port 53"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			body := `{"filter": "` + tc.userFilter + `"}`
+			req := httptest.NewRequest(http.MethodPost, "/api/bpf-filter", strings.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+
+			s.handleBPFFilter(w, req)
+
+			if w.Code != http.StatusOK {
+				t.Fatalf("status code = %d, want %d", w.Code, http.StatusOK)
+			}
+
+			var resp map[string]interface{}
+			if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+				t.Fatalf("failed to decode response: %v", err)
+			}
+
+			filter, ok := resp["filter"].(string)
+			if !ok {
+				t.Fatal("response missing 'filter' field")
+			}
+
+			// Filter should be EXACTLY what the user sent - no hub exclusion added
+			if filter != tc.userFilter {
+				t.Errorf("filter = %q, want %q (hub should NOT modify the filter)", filter, tc.userFilter)
+			}
+
+			// Double-check it doesn't contain hub-related terms
+			if strings.Contains(filter, "10.244.0.100") {
+				t.Errorf("filter should NOT contain hub IP, got: %q", filter)
+			}
+		})
+	}
+}
+
+// TestHandleBPFFilter_POST_StoredFilterMatchesUserFilter verifies stored filter is unchanged
+func TestHandleBPFFilter_POST_StoredFilterMatchesUserFilter(t *testing.T) {
+	s := setupTestServer(t)
+	defer s.pcapBuffer.Close()
+
+	userFilter := "tcp port 443"
+	body := `{"filter": "` + userFilter + `"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/bpf-filter", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	s.handleBPFFilter(w, req)
+
+	// Check the stored filter
+	s.bpfFilterMutex.RLock()
+	storedFilter := s.bpfFilter
+	s.bpfFilterMutex.RUnlock()
+
+	if storedFilter != userFilter {
+		t.Errorf("stored filter = %q, want %q", storedFilter, userFilter)
+	}
+}
+
 // ============================================================================
 // TestHandlePCAPUpload tests for POST /api/pcap/upload endpoint
 // ============================================================================

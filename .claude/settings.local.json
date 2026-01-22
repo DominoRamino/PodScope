@@ -50,7 +50,11 @@
       "Bash(wsl kubectl get:*)",
       "Bash(git -C \"c:\\\\Users\\\\alram\\\\Documents\\\\PodScope\" log --oneline -5 -- Makefile)",
       "Bash(go test:*)",
-      "Bash(xargs:*)"
+      "Bash(xargs:*)",
+      "Bash(ls:*)",
+      "Bash(npx vitest:*)",
+      "Bash(wsl bash -c \"cd /mnt/c/Users/alram/Documents/PodScope/ui && npm test -- --run\")",
+      "Bash(wsl bash:*)"
     ]
   }
 }

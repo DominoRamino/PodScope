@@ -75,18 +75,33 @@ func (c *Capturer) SetBPFFilter(filter string) {
 	c.defaultBPFFilter = filter // Store as default for reset
 }
 
-// UpdateBPFFilter updates the BPF filter on a running capture
-func (c *Capturer) UpdateBPFFilter(filter string) error {
+// BuildCombinedFilter combines a user filter with the default hub exclusion filter.
+// This ensures hub traffic is always excluded regardless of what filter the user sets.
+func (c *Capturer) BuildCombinedFilter(userFilter string) string {
+	// If no user filter, use the default (which includes hub exclusion)
+	if userFilter == "" {
+		return c.defaultBPFFilter
+	}
+
+	// If no default filter, use the user filter as-is
+	if c.defaultBPFFilter == "" {
+		return userFilter
+	}
+
+	// Combine: (user filter) and (default hub exclusion filter)
+	return fmt.Sprintf("(%s) and (%s)", userFilter, c.defaultBPFFilter)
+}
+
+// UpdateBPFFilter updates the BPF filter on a running capture.
+// The user filter is combined with the default hub exclusion to ensure hub traffic
+// is always excluded regardless of what filter the user sets.
+func (c *Capturer) UpdateBPFFilter(userFilter string) error {
 	if c.handle == nil {
 		return fmt.Errorf("capture not running")
 	}
 
-	// If empty string, reset to default filter
-	targetFilter := filter
-	if filter == "" {
-		targetFilter = c.defaultBPFFilter
-		log.Printf("Empty filter received - resetting to default")
-	}
+	// Build the combined filter (user filter + hub exclusion)
+	targetFilter := c.BuildCombinedFilter(userFilter)
 
 	// Check if filter actually changed
 	if c.bpfFilter == targetFilter {
@@ -95,8 +110,9 @@ func (c *Capturer) UpdateBPFFilter(filter string) error {
 
 	log.Printf("====================================")
 	log.Printf("UPDATING BPF FILTER:")
-	log.Printf("  Old: %s", c.bpfFilter)
-	log.Printf("  New: %s", targetFilter)
+	log.Printf("  User filter: %s", userFilter)
+	log.Printf("  Combined:    %s", targetFilter)
+	log.Printf("  Old:         %s", c.bpfFilter)
 	log.Printf("====================================")
 
 	// Apply new filter to running handle

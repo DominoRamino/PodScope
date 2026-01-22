@@ -27,10 +27,10 @@ import (
 
 // Server is the Hub server that aggregates traffic from agents
 type Server struct {
-	httpPort    int
-	grpcPort    int
-	sessionID   string
-	pcapDir     string
+	httpPort  int
+	grpcPort  int
+	sessionID string
+	pcapDir   string
 
 	// Flow storage - bounded ring buffer
 	flowBuffer *FlowRingBuffer
@@ -80,11 +80,11 @@ func NewServer(httpPort, grpcPort int) *Server {
 	catchupLimit := getEnvIntServer("WS_CATCHUP_LIMIT", 200)
 
 	s := &Server{
-		httpPort:      httpPort,
-		grpcPort:      grpcPort,
-		sessionID:     sessionID,
-		pcapDir:       pcapDir,
-		flowBuffer:    NewFlowRingBuffer(0), // Uses MAX_FLOWS env or default 10000
+		httpPort:   httpPort,
+		grpcPort:   grpcPort,
+		sessionID:  sessionID,
+		pcapDir:    pcapDir,
+		flowBuffer: NewFlowRingBuffer(0), // Uses MAX_FLOWS env or default 10000
 		wsClients:     make(map[*websocket.Conn]bool),
 		flowBatch:     make([]*protocol.Flow, 0, 64),
 		batchInterval: time.Duration(batchIntervalMs) * time.Millisecond,
@@ -113,6 +113,7 @@ func getEnvIntServer(key string, defaultVal int) int {
 	}
 	return defaultVal
 }
+
 
 // Start starts the Hub server
 func (s *Server) Start(ctx context.Context) error {
@@ -416,7 +417,8 @@ func (s *Server) handleBPFFilter(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Update the filter
+		// Store the user's filter unchanged
+		// The agent is responsible for combining with its own hub exclusion
 		s.bpfFilterMutex.Lock()
 		s.bpfFilter = *req.Filter
 		s.bpfFilterMutex.Unlock()
