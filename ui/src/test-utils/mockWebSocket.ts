@@ -157,31 +157,60 @@ export function createMockWebSocketClass(): {
 } {
   const instances: MockWebSocketInstance[] = []
 
-  class MockWebSocketClass {
+  class MockWebSocketClass implements MockWebSocketInstance {
     static CONNECTING = CONNECTING
     static OPEN = OPEN
     static CLOSING = CLOSING
     static CLOSED = CLOSED
 
-    // These get reassigned in the constructor
-    url!: string
-    readyState!: number
-    onopen!: ((event: Event) => void) | null
-    onclose!: ((event: CloseEvent) => void) | null
-    onmessage!: ((event: MessageEvent) => void) | null
-    onerror!: ((event: Event) => void) | null
-    send!: Mock
-    close!: Mock
-    simulateMessage!: (data: unknown) => void
-    simulateOpen!: () => void
-    simulateClose!: (code?: number, reason?: string) => void
-    simulateError!: (message?: string) => void
+    url: string
+    readyState: number = CONNECTING
+    onopen: ((event: Event) => void) | null = null
+    onclose: ((event: CloseEvent) => void) | null = null
+    onmessage: ((event: MessageEvent) => void) | null = null
+    onerror: ((event: Event) => void) | null = null
+    send: Mock
+    close: Mock
 
     constructor(url: string) {
-      const instance = createMockWebSocket(url)
-      // Copy all properties to this instance
-      Object.assign(this, instance)
-      instances.push(this as unknown as MockWebSocketInstance)
+      this.url = url
+      this.send = vi.fn()
+      this.close = vi.fn(() => {
+        this.readyState = CLOSED
+      })
+      instances.push(this)
+    }
+
+    simulateMessage(data: unknown): void {
+      if (this.onmessage) {
+        const messageData = typeof data === 'string' ? data : JSON.stringify(data)
+        const event = new MessageEvent('message', { data: messageData })
+        this.onmessage(event)
+      }
+    }
+
+    simulateOpen(): void {
+      this.readyState = OPEN
+      if (this.onopen) {
+        const event = new Event('open')
+        this.onopen(event)
+      }
+    }
+
+    simulateClose(code: number = 1000, reason: string = ''): void {
+      this.readyState = CLOSED
+      if (this.onclose) {
+        const event = new CloseEvent('close', { code, reason, wasClean: code === 1000 })
+        this.onclose(event)
+      }
+    }
+
+    simulateError(message: string = 'WebSocket error'): void {
+      if (this.onerror) {
+        const event = new Event('error')
+        Object.defineProperty(event, 'message', { value: message })
+        this.onerror(event)
+      }
     }
   }
 
