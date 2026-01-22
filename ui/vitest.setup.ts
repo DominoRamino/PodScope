@@ -62,3 +62,92 @@ Object.defineProperty(window, 'matchMedia', {
 // URL.createObjectURL mock for blob downloads
 URL.createObjectURL = vi.fn(() => 'blob:mock-url')
 URL.revokeObjectURL = vi.fn()
+
+// ResizeObserver mock for virtualized lists (@tanstack/react-virtual)
+// The callback needs to be called with entry data for the virtualizer to measure
+class MockResizeObserver {
+  private callback: ResizeObserverCallback
+  private observedElements: Set<Element> = new Set()
+
+  constructor(callback: ResizeObserverCallback) {
+    this.callback = callback
+  }
+
+  observe(element: Element) {
+    this.observedElements.add(element)
+    // Immediately trigger callback with mock dimensions
+    const entry = {
+      target: element,
+      contentRect: {
+        width: 800,
+        height: 500,
+        top: 0,
+        left: 0,
+        bottom: 500,
+        right: 800,
+        x: 0,
+        y: 0,
+        toJSON: () => ({}),
+      },
+      borderBoxSize: [{ inlineSize: 800, blockSize: 500 }],
+      contentBoxSize: [{ inlineSize: 800, blockSize: 500 }],
+      devicePixelContentBoxSize: [{ inlineSize: 800, blockSize: 500 }],
+    } as unknown as ResizeObserverEntry
+
+    // Call callback async to match real behavior
+    setTimeout(() => {
+      this.callback([entry], this)
+    }, 0)
+  }
+
+  unobserve(element: Element) {
+    this.observedElements.delete(element)
+  }
+
+  disconnect() {
+    this.observedElements.clear()
+  }
+}
+vi.stubGlobal('ResizeObserver', MockResizeObserver)
+
+// Mock element measurement for virtualized lists
+// The virtual list needs getBoundingClientRect to return a height > 0
+const originalGetBoundingClientRect = Element.prototype.getBoundingClientRect
+Element.prototype.getBoundingClientRect = function () {
+  const result = originalGetBoundingClientRect.call(this)
+  // If this element has overflow-y-auto class (virtual scroll container), return a usable height
+  if (this.classList?.contains('overflow-y-auto')) {
+    return {
+      ...result,
+      height: 500, // Virtual container height
+      width: 800,
+      top: 0,
+      left: 0,
+      bottom: 500,
+      right: 800,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    }
+  }
+  return result
+}
+
+// Mock scrollHeight and clientHeight for virtual scroll containers
+Object.defineProperty(HTMLElement.prototype, 'scrollHeight', {
+  get() {
+    if (this.classList?.contains('overflow-y-auto')) {
+      return 500
+    }
+    return 0
+  },
+})
+
+Object.defineProperty(HTMLElement.prototype, 'clientHeight', {
+  get() {
+    if (this.classList?.contains('overflow-y-auto')) {
+      return 500
+    }
+    return 0
+  },
+})
