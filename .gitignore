@@ -39,6 +39,7 @@ Thumbs.db
 ui/node_modules/
 ui/dist/
 ui/.vite/
+ui/coverage/
 *.tsbuildinfo
 
 # Build artifacts
