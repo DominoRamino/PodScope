@@ -1,5 +1,6 @@
 import { Flow } from '../types'
 import { X, Download, ArrowRight, Lock, Terminal } from 'lucide-react'
+import { formatBytes } from '../utils'
 
 interface FlowDetailProps {
   flow: Flow
@@ -9,13 +10,6 @@ interface FlowDetailProps {
 }
 
 export function FlowDetail({ flow, onClose, onDownloadPCAP, onOpenTerminal }: FlowDetailProps) {
-  const formatBytes = (bytes: number): string => {
-    if (bytes === 0) return '0 B'
-    if (bytes < 1024) return bytes + ' B'
-    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
-    return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
-  }
-
   const formatTimestamp = (timestamp: string): string => {
     const date = new Date(timestamp)
     return date.toLocaleString()

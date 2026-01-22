@@ -2,6 +2,7 @@ import { Flow, Protocol } from '../types'
 import { ArrowRight, Lock, Server } from 'lucide-react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { useRef, memo } from 'react'
+import { formatBytes } from '../utils'
 
 interface FlowListProps {
   flows: Flow[]
@@ -98,13 +99,6 @@ const FlowRowMemo = memo(function FlowRow({ flow, selected, onClick }: FlowRowPr
       minute: '2-digit',
       second: '2-digit',
     }) + '.' + String(date.getMilliseconds()).padStart(3, '0')
-  }
-
-  const formatBytes = (bytes: number): string => {
-    if (bytes === 0) return '0 B'
-    if (bytes < 1024) return bytes + ' B'
-    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
-    return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
   }
 
   const getProtocolColor = (protocol: Protocol): string => {
