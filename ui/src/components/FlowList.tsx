@@ -2,7 +2,7 @@ import { Flow, Protocol } from '../types'
 import { ArrowRight, Lock, Server } from 'lucide-react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { useRef, memo } from 'react'
-import { formatBytes } from '../utils'
+import { formatBytes, formatTime } from '../utils'
 
 interface FlowListProps {
   flows: Flow[]
@@ -91,16 +91,6 @@ interface FlowRowProps {
 
 // Memoized FlowRow to prevent unnecessary re-renders
 const FlowRowMemo = memo(function FlowRow({ flow, selected, onClick }: FlowRowProps) {
-  const formatTime = (timestamp: string): string => {
-    const date = new Date(timestamp)
-    return date.toLocaleTimeString('en-US', {
-      hour12: false,
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-    }) + '.' + String(date.getMilliseconds()).padStart(3, '0')
-  }
-
   const getProtocolColor = (protocol: Protocol): string => {
     switch (protocol) {
       case 'HTTP':
