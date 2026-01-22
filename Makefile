@@ -1,4 +1,4 @@
-.PHONY: all build build-agent build-hub build-cli build-cli-linux load clean help version inspect use-tag setup-cluster dev dev-quick dev-ui load-agent load-hub restart-test-pods test
+.PHONY: all build build-agent build-hub build-cli build-cli-linux load clean help version inspect use-tag setup-cluster dev dev-quick dev-ui load-agent load-hub restart-test-pods test test-ui
 
 # Default target
 all: build-cli build load
@@ -29,6 +29,10 @@ help:
 	@echo "  make dev-ui           - UI-only development with Vite hot-reload"
 	@echo "  make setup-cluster    - Ensure minikube running with podinfo test workload"
 	@echo "  make restart-test-pods - Restart podinfo pods to clear ephemeral containers"
+	@echo ""
+	@echo "Testing:"
+	@echo "  make test             - Run Go backend tests"
+	@echo "  make test-ui          - Run UI tests (single run)"
 	@echo ""
 	@echo "Version Management:"
 	@echo "  make version     - Show current version info"
@@ -161,6 +165,20 @@ dev-quick: setup-cluster build-cli-linux
 # UI-only development (Vite hot-reload)
 dev-ui:
 	@cd ui && npm run dev
+
+# =============================================================================
+# Testing Targets
+# =============================================================================
+
+# Run Go backend tests
+test:
+	@echo "Running Go tests..."
+	@go test -v -race ./pkg/...
+
+# Run UI tests
+test-ui:
+	@echo "Running UI tests..."
+	@cd ui && npm test -- --run
 
 # Individual image loading (via )
 load-agent:
