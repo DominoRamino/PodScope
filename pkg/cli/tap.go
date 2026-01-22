@@ -71,10 +71,15 @@ func runTap(cmd *cobra.Command, args []string) error {
 	}
 
 	// Clean up any stale sessions from previous ungraceful exits
-	if cleaned, err := k8sClient.CleanupStaleSessions(ctx, staleSessionMaxAge); err != nil {
+	if cleaned, err := k8sClient.CleanupStaleNamespaces(ctx, staleSessionMaxAge); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: failed to cleanup stale sessions: %v\n", err)
 	} else if cleaned > 0 {
 		fmt.Printf("Cleaned up %d stale session(s)\n", cleaned)
+	}
+
+	// Clean up orphaned RBAC resources from sessions where namespace was deleted but RBAC remained
+	if err := k8sClient.CleanupOrphanedRBAC(ctx); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to cleanup orphaned RBAC resources: %v\n", err)
 	}
 
 	// Create session manager

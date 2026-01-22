@@ -193,3 +193,9 @@ restart-test-pods:
 	@kubectl rollout restart deploy podinfo -n default 
 	@kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=podinfo -n default --timeout=60s
 	@echo "✓ Test pods restarted"
+
+# Run unit tests
+test:
+	@echo "Running unit tests..."
+	go test -v -race ./pkg/...
+	@echo "✓ Tests complete"
