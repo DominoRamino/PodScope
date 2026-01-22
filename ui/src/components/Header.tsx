@@ -346,7 +346,11 @@ User request:`
         </button>
 
         <span className="text-xs text-slate-500 ml-2">
-          (Ports: {filterOptions.showAllPorts ? 'All' : filterOptions.showOnlyHTTP ? '80, 443, 8080, 8443, etc.' : 'Custom'})
+          ({filterOptions.showAllPorts
+            ? 'All traffic'
+            : filterOptions.showOnlyHTTP
+              ? 'HTTP/HTTPS/TLS protocols only'
+              : 'Default'})
         </span>
       </div>
 

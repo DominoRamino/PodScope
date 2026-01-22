@@ -143,8 +143,6 @@ function App() {
     return () => clearInterval(interval)
   }, [])
 
-  // Common HTTP/HTTPS ports - memoized to avoid recreating on every render
-  const HTTP_PORTS = useMemo(() => new Set([80, 443, 8080, 8443, 3000, 5000, 8000, 8888, 9090]), [])
   const DNS_PORT = 53
 
   // Memoized filtered flows - only recalculates when dependencies change
@@ -154,10 +152,13 @@ function App() {
       if (filterOptions.showAllPorts) {
         // Show everything (no port filtering)
       } else if (filterOptions.showOnlyHTTP) {
-        // Show only HTTP/HTTPS ports
-        const isHTTPPort = HTTP_PORTS.has(flow.srcPort) || HTTP_PORTS.has(flow.dstPort)
-        const isHTTPProtocol = flow.protocol === 'HTTP' || flow.protocol === 'HTTPS'
-        if (!isHTTPPort && !isHTTPProtocol) return false
+        // Show only flows with detected HTTP/HTTPS/TLS protocol or parsed HTTP data
+        const isHTTPProtocol = flow.protocol === 'HTTP' ||
+                               flow.protocol === 'HTTPS' ||
+                               flow.protocol === 'TLS'
+        const hasHTTPData = flow.http != null
+
+        if (!isHTTPProtocol && !hasHTTPData) return false
       }
 
       // DNS filtering (skip if showAllPorts is enabled)
@@ -181,7 +182,7 @@ function App() {
         flow.tls?.sni?.toLowerCase().includes(searchLower)
       )
     })
-  }, [flows, filter, filterOptions, HTTP_PORTS])
+  }, [flows, filter, filterOptions])
 
   // Parse pod name to extract namespace and pod
   const parsePodName = (podName: string): { namespace: string; name: string } | null => {
@@ -254,7 +255,7 @@ function App() {
   }, [filterOptions, filter])
 
   return (
-    <div className="h-screen flex flex-col bg-slate-900 text-white">
+    <div className="h-screen flex flex-col bg-slate-900 text-white overflow-hidden">
       <Header
         connected={connected}
         flowCount={flows.length}
@@ -268,7 +269,7 @@ function App() {
         onTogglePause={handleTogglePause}
       />
 
-      <div className={`flex-1 flex overflow-hidden ${terminalTarget && !terminalMaximized ? 'h-[calc(100%-20rem)]' : ''}`}>
+      <div className="flex-1 flex min-h-0 overflow-hidden">
         {/* Flow List - Left Panel */}
         <div className={`${selectedFlow ? 'w-1/2' : 'w-full'} border-r border-slate-700 overflow-hidden`}>
           <FlowList
@@ -293,7 +294,7 @@ function App() {
 
       {/* Terminal Panel */}
       {terminalTarget && (
-        <div className={`${terminalMaximized ? 'fixed inset-0 z-50' : 'h-80'}`}>
+        <div className={`${terminalMaximized ? 'fixed inset-0 z-50' : 'h-80 flex-shrink-0'}`}>
           <Terminal
             namespace={terminalTarget.namespace}
             podName={terminalTarget.podName}
