@@ -444,4 +444,684 @@ describe('FlowDetail component', () => {
       expect(screen.getByText('No timing data available')).toBeInTheDocument()
     })
   })
+
+  describe('HTTP section', () => {
+    describe('visibility', () => {
+      it('shows HTTP Request section for HTTP flows', () => {
+        const props = createDefaultProps()
+        props.flow = createMockHTTPFlow({ protocol: 'HTTP' })
+
+        render(<FlowDetail {...props} />)
+
+        expect(screen.getByText('HTTP Request')).toBeInTheDocument()
+      })
+
+      it('shows HTTP Response section for HTTP flows', () => {
+        const props = createDefaultProps()
+        props.flow = createMockHTTPFlow({ protocol: 'HTTP' })
+
+        render(<FlowDetail {...props} />)
+
+        expect(screen.getByText('HTTP Response')).toBeInTheDocument()
+      })
+
+      it('shows HTTP sections for HTTPS flows with HTTP info', () => {
+        const props = createDefaultProps()
+        props.flow = createMockHTTPFlow({ protocol: 'HTTPS' })
+
+        render(<FlowDetail {...props} />)
+
+        expect(screen.getByText('HTTP Request')).toBeInTheDocument()
+        expect(screen.getByText('HTTP Response')).toBeInTheDocument()
+      })
+
+      it('does not show HTTP section for plain TCP flows', () => {
+        const props = createDefaultProps()
+        props.flow = createMockFlow({ protocol: 'TCP', http: undefined })
+
+        render(<FlowDetail {...props} />)
+
+        expect(screen.queryByText('HTTP Request')).not.toBeInTheDocument()
+        expect(screen.queryByText('HTTP Response')).not.toBeInTheDocument()
+      })
+
+      it('does not show HTTP section for TLS flows without HTTP info', () => {
+        const props = createDefaultProps()
+        props.flow = createMockTLSFlow({ protocol: 'TLS', http: undefined })
+
+        render(<FlowDetail {...props} />)
+
+        expect(screen.queryByText('HTTP Request')).not.toBeInTheDocument()
+        expect(screen.queryByText('HTTP Response')).not.toBeInTheDocument()
+      })
+    })
+
+    describe('request method display', () => {
+      it('displays GET method', () => {
+        const props = createDefaultProps()
+        props.flow = createMockHTTPFlow({
+          http: {
+            method: 'GET',
+            url: '/api/test',
+            host: 'api.example.com',
+            statusCode: 200,
+            statusText: 'OK',
+          },
+        })
+
+        render(<FlowDetail {...props} />)
+
+        expect(screen.getByText('GET')).toBeInTheDocument()
+      })
+
+      it('displays POST method', () => {
+        const props = createDefaultProps()
+        props.flow = createMockHTTPFlow({
+          http: {
+            method: 'POST',
+            url: '/api/users',
+            host: 'api.example.com',
+            statusCode: 201,
+            statusText: 'Created',
+          },
+        })
+
+        render(<FlowDetail {...props} />)
+
+        expect(screen.getByText('POST')).toBeInTheDocument()
+      })
+
+      it('displays PUT method', () => {
+        const props = createDefaultProps()
+        props.flow = createMockHTTPFlow({
+          http: {
+            method: 'PUT',
+            url: '/api/users/1',
+            host: 'api.example.com',
+            statusCode: 200,
+            statusText: 'OK',
+          },
+        })
+
+        render(<FlowDetail {...props} />)
+
+        expect(screen.getByText('PUT')).toBeInTheDocument()
+      })
+
+      it('displays DELETE method', () => {
+        const props = createDefaultProps()
+        props.flow = createMockHTTPFlow({
+          http: {
+            method: 'DELETE',
+            url: '/api/users/1',
+            host: 'api.example.com',
+            statusCode: 204,
+            statusText: 'No Content',
+          },
+        })
+
+        render(<FlowDetail {...props} />)
+
+        expect(screen.getByText('DELETE')).toBeInTheDocument()
+      })
+    })
+
+    describe('URL display', () => {
+      it('displays the request URL', () => {
+        const props = createDefaultProps()
+        props.flow = createMockHTTPFlow({
+          http: {
+            method: 'GET',
+            url: '/api/products/123',
+            host: 'api.example.com',
+            statusCode: 200,
+            statusText: 'OK',
+          },
+        })
+
+        render(<FlowDetail {...props} />)
+
+        expect(screen.getByText('/api/products/123')).toBeInTheDocument()
+      })
+
+      it('displays URL with query parameters', () => {
+        const props = createDefaultProps()
+        props.flow = createMockHTTPFlow({
+          http: {
+            method: 'GET',
+            url: '/api/search?q=test&page=1',
+            host: 'api.example.com',
+            statusCode: 200,
+            statusText: 'OK',
+          },
+        })
+
+        render(<FlowDetail {...props} />)
+
+        expect(screen.getByText('/api/search?q=test&page=1')).toBeInTheDocument()
+      })
+    })
+
+    describe('host display', () => {
+      it('displays the host header when present', () => {
+        const props = createDefaultProps()
+        props.flow = createMockHTTPFlow({
+          http: {
+            method: 'GET',
+            url: '/api/test',
+            host: 'api.example.com',
+            statusCode: 200,
+            statusText: 'OK',
+          },
+        })
+
+        render(<FlowDetail {...props} />)
+
+        expect(screen.getByText('Host')).toBeInTheDocument()
+        expect(screen.getByText('api.example.com')).toBeInTheDocument()
+      })
+
+      it('does not display host when empty string', () => {
+        const props = createDefaultProps()
+        props.flow = createMockHTTPFlow({
+          http: {
+            method: 'GET',
+            url: '/api/test',
+            host: '',
+            statusCode: 200,
+            statusText: 'OK',
+          },
+        })
+
+        render(<FlowDetail {...props} />)
+
+        // Host label shouldn't appear in the HTTP Request section when host is empty
+        const httpRequestSection = screen.getByText('HTTP Request').parentElement
+        expect(httpRequestSection).not.toHaveTextContent('Host')
+      })
+    })
+
+    describe('response status display', () => {
+      it('displays 200 OK status', () => {
+        const props = createDefaultProps()
+        props.flow = createMockHTTPFlow({
+          http: {
+            method: 'GET',
+            url: '/api/test',
+            host: 'api.example.com',
+            statusCode: 200,
+            statusText: 'OK',
+          },
+        })
+
+        render(<FlowDetail {...props} />)
+
+        expect(screen.getByText('200 OK')).toBeInTheDocument()
+      })
+
+      it('displays 404 Not Found status', () => {
+        const props = createDefaultProps()
+        props.flow = createMockHTTPFlow({
+          http: {
+            method: 'GET',
+            url: '/api/missing',
+            host: 'api.example.com',
+            statusCode: 404,
+            statusText: 'Not Found',
+          },
+        })
+
+        render(<FlowDetail {...props} />)
+
+        expect(screen.getByText('404 Not Found')).toBeInTheDocument()
+      })
+
+      it('displays 500 Internal Server Error status', () => {
+        const props = createDefaultProps()
+        props.flow = createMockHTTPFlow({
+          http: {
+            method: 'POST',
+            url: '/api/error',
+            host: 'api.example.com',
+            statusCode: 500,
+            statusText: 'Internal Server Error',
+          },
+        })
+
+        render(<FlowDetail {...props} />)
+
+        expect(screen.getByText('500 Internal Server Error')).toBeInTheDocument()
+      })
+    })
+
+    describe('content info display', () => {
+      it('displays content type when present', () => {
+        const props = createDefaultProps()
+        props.flow = createMockHTTPFlow({
+          http: {
+            method: 'GET',
+            url: '/api/data',
+            host: 'api.example.com',
+            statusCode: 200,
+            statusText: 'OK',
+            contentType: 'application/json',
+          },
+        })
+
+        render(<FlowDetail {...props} />)
+
+        expect(screen.getByText('Content-Type')).toBeInTheDocument()
+        expect(screen.getByText('application/json')).toBeInTheDocument()
+      })
+
+      it('displays content length when present', () => {
+        const props = createDefaultProps()
+        props.flow = createMockHTTPFlow({
+          http: {
+            method: 'GET',
+            url: '/api/data',
+            host: 'api.example.com',
+            statusCode: 200,
+            statusText: 'OK',
+            contentLength: 2048,
+          },
+        })
+
+        render(<FlowDetail {...props} />)
+
+        expect(screen.getByText('Content-Length')).toBeInTheDocument()
+        expect(screen.getByText('2.00 KB')).toBeInTheDocument()
+      })
+    })
+
+    describe('headers display', () => {
+      it('displays request headers when present', () => {
+        const props = createDefaultProps()
+        props.flow = createMockHTTPFlow({
+          http: {
+            method: 'GET',
+            url: '/api/test',
+            host: 'api.example.com',
+            statusCode: 200,
+            statusText: 'OK',
+            requestHeaders: {
+              'Authorization': 'Bearer token123',
+              'User-Agent': 'TestClient/1.0',
+            },
+          },
+        })
+
+        render(<FlowDetail {...props} />)
+
+        expect(screen.getByText('Request Headers')).toBeInTheDocument()
+        expect(screen.getByText('Authorization')).toBeInTheDocument()
+        expect(screen.getByText('Bearer token123')).toBeInTheDocument()
+        expect(screen.getByText('User-Agent')).toBeInTheDocument()
+        expect(screen.getByText('TestClient/1.0')).toBeInTheDocument()
+      })
+
+      it('displays response headers when present', () => {
+        const props = createDefaultProps()
+        props.flow = createMockHTTPFlow({
+          http: {
+            method: 'GET',
+            url: '/api/test',
+            host: 'api.example.com',
+            statusCode: 200,
+            statusText: 'OK',
+            responseHeaders: {
+              'X-Request-Id': 'req-abc-123',
+              'Cache-Control': 'no-cache',
+            },
+          },
+        })
+
+        render(<FlowDetail {...props} />)
+
+        expect(screen.getByText('Response Headers')).toBeInTheDocument()
+        expect(screen.getByText('X-Request-Id')).toBeInTheDocument()
+        expect(screen.getByText('req-abc-123')).toBeInTheDocument()
+        expect(screen.getByText('Cache-Control')).toBeInTheDocument()
+        expect(screen.getByText('no-cache')).toBeInTheDocument()
+      })
+
+      it('does not display headers section when headers are empty', () => {
+        const props = createDefaultProps()
+        props.flow = createMockHTTPFlow({
+          http: {
+            method: 'GET',
+            url: '/api/test',
+            host: 'api.example.com',
+            statusCode: 200,
+            statusText: 'OK',
+            requestHeaders: {},
+            responseHeaders: {},
+          },
+        })
+
+        render(<FlowDetail {...props} />)
+
+        expect(screen.queryByText('Request Headers')).not.toBeInTheDocument()
+        expect(screen.queryByText('Response Headers')).not.toBeInTheDocument()
+      })
+    })
+
+    describe('body display', () => {
+      it('displays request body when present', () => {
+        const props = createDefaultProps()
+        props.flow = createMockHTTPFlow({
+          http: {
+            method: 'POST',
+            url: '/api/users',
+            host: 'api.example.com',
+            statusCode: 201,
+            statusText: 'Created',
+            requestBody: '{"name": "John", "email": "john@example.com"}',
+          },
+        })
+
+        render(<FlowDetail {...props} />)
+
+        expect(screen.getByText('Request Body')).toBeInTheDocument()
+        expect(screen.getByText('{"name": "John", "email": "john@example.com"}')).toBeInTheDocument()
+      })
+
+      it('displays response body when present', () => {
+        const props = createDefaultProps()
+        props.flow = createMockHTTPFlow({
+          http: {
+            method: 'GET',
+            url: '/api/data',
+            host: 'api.example.com',
+            statusCode: 200,
+            statusText: 'OK',
+            responseBody: '{"result": "success", "data": [1, 2, 3]}',
+          },
+        })
+
+        render(<FlowDetail {...props} />)
+
+        expect(screen.getByText(/Response Body/)).toBeInTheDocument()
+        expect(screen.getByText('{"result": "success", "data": [1, 2, 3]}')).toBeInTheDocument()
+      })
+    })
+  })
+
+  describe('TLS section', () => {
+    describe('visibility', () => {
+      it('shows TLS Info section for HTTPS flows', () => {
+        const props = createDefaultProps()
+        props.flow = createMockTLSFlow({ protocol: 'HTTPS' })
+
+        render(<FlowDetail {...props} />)
+
+        expect(screen.getByText('TLS Info')).toBeInTheDocument()
+      })
+
+      it('shows TLS Info section for TLS flows', () => {
+        const props = createDefaultProps()
+        props.flow = createMockTLSFlow({ protocol: 'TLS' })
+
+        render(<FlowDetail {...props} />)
+
+        expect(screen.getByText('TLS Info')).toBeInTheDocument()
+      })
+
+      it('does not show TLS section for plain TCP flows', () => {
+        const props = createDefaultProps()
+        props.flow = createMockFlow({ protocol: 'TCP', tls: undefined })
+
+        render(<FlowDetail {...props} />)
+
+        expect(screen.queryByText('TLS Info')).not.toBeInTheDocument()
+      })
+
+      it('does not show TLS section for HTTP flows without TLS', () => {
+        const props = createDefaultProps()
+        props.flow = createMockHTTPFlow({ protocol: 'HTTP', tls: undefined })
+
+        render(<FlowDetail {...props} />)
+
+        expect(screen.queryByText('TLS Info')).not.toBeInTheDocument()
+      })
+    })
+
+    describe('SNI (Server Name) display', () => {
+      it('displays SNI when present', () => {
+        const props = createDefaultProps()
+        props.flow = createMockTLSFlow({
+          tls: {
+            version: 'TLS 1.3',
+            sni: 'api.example.com',
+            cipherSuite: 'TLS_AES_256_GCM_SHA384',
+            encrypted: true,
+          },
+        })
+
+        render(<FlowDetail {...props} />)
+
+        expect(screen.getByText('SNI')).toBeInTheDocument()
+        expect(screen.getByText('api.example.com')).toBeInTheDocument()
+      })
+
+      it('displays SNI with subdomain', () => {
+        const props = createDefaultProps()
+        props.flow = createMockTLSFlow({
+          tls: {
+            version: 'TLS 1.2',
+            sni: 'secure.api.example.com',
+            cipherSuite: 'TLS_AES_128_GCM_SHA256',
+            encrypted: true,
+          },
+        })
+
+        render(<FlowDetail {...props} />)
+
+        expect(screen.getByText('secure.api.example.com')).toBeInTheDocument()
+      })
+
+      it('does not display SNI when it is empty string', () => {
+        const props = createDefaultProps()
+        props.flow = createMockTLSFlow({
+          tls: {
+            version: 'TLS 1.3',
+            sni: '',
+            cipherSuite: 'TLS_AES_256_GCM_SHA384',
+            encrypted: true,
+          },
+        })
+
+        render(<FlowDetail {...props} />)
+
+        expect(screen.getByText('TLS Info')).toBeInTheDocument()
+        // SNI label should not appear when SNI is empty
+        expect(screen.queryByText('SNI')).not.toBeInTheDocument()
+      })
+    })
+
+    describe('TLS version display', () => {
+      it('displays TLS 1.3 version', () => {
+        const props = createDefaultProps()
+        props.flow = createMockTLSFlow({
+          tls: {
+            version: 'TLS 1.3',
+            sni: 'example.com',
+            cipherSuite: 'TLS_AES_256_GCM_SHA384',
+            encrypted: true,
+          },
+        })
+
+        render(<FlowDetail {...props} />)
+
+        expect(screen.getByText('Version')).toBeInTheDocument()
+        expect(screen.getByText('TLS 1.3')).toBeInTheDocument()
+      })
+
+      it('displays TLS 1.2 version', () => {
+        const props = createDefaultProps()
+        props.flow = createMockTLSFlow({
+          tls: {
+            version: 'TLS 1.2',
+            sni: 'example.com',
+            cipherSuite: 'TLS_AES_128_GCM_SHA256',
+            encrypted: true,
+          },
+        })
+
+        render(<FlowDetail {...props} />)
+
+        expect(screen.getByText('TLS 1.2')).toBeInTheDocument()
+      })
+
+      it('displays TLS 1.1 version', () => {
+        const props = createDefaultProps()
+        props.flow = createMockTLSFlow({
+          tls: {
+            version: 'TLS 1.1',
+            sni: 'example.com',
+            cipherSuite: 'TLS_RSA_WITH_AES_256_CBC_SHA',
+            encrypted: true,
+          },
+        })
+
+        render(<FlowDetail {...props} />)
+
+        expect(screen.getByText('TLS 1.1')).toBeInTheDocument()
+      })
+
+      it('displays TLS 1.0 version', () => {
+        const props = createDefaultProps()
+        props.flow = createMockTLSFlow({
+          tls: {
+            version: 'TLS 1.0',
+            sni: 'example.com',
+            cipherSuite: 'TLS_RSA_WITH_AES_128_CBC_SHA',
+            encrypted: true,
+          },
+        })
+
+        render(<FlowDetail {...props} />)
+
+        expect(screen.getByText('TLS 1.0')).toBeInTheDocument()
+      })
+    })
+
+    describe('cipher suite display', () => {
+      it('displays cipher suite when present', () => {
+        const props = createDefaultProps()
+        props.flow = createMockTLSFlow({
+          tls: {
+            version: 'TLS 1.3',
+            sni: 'example.com',
+            cipherSuite: 'TLS_AES_256_GCM_SHA384',
+            encrypted: true,
+          },
+        })
+
+        render(<FlowDetail {...props} />)
+
+        expect(screen.getByText('Cipher Suite')).toBeInTheDocument()
+        expect(screen.getByText('TLS_AES_256_GCM_SHA384')).toBeInTheDocument()
+      })
+
+      it('does not display cipher suite when empty string', () => {
+        const props = createDefaultProps()
+        props.flow = createMockTLSFlow({
+          tls: {
+            version: 'TLS 1.3',
+            sni: 'example.com',
+            cipherSuite: '',
+            encrypted: true,
+          },
+        })
+
+        render(<FlowDetail {...props} />)
+
+        expect(screen.queryByText('Cipher Suite')).not.toBeInTheDocument()
+      })
+    })
+
+    describe('ALPN display', () => {
+      it('displays ALPN protocols when present', () => {
+        const props = createDefaultProps()
+        props.flow = createMockTLSFlow({
+          tls: {
+            version: 'TLS 1.3',
+            sni: 'example.com',
+            cipherSuite: 'TLS_AES_256_GCM_SHA384',
+            alpn: ['h2', 'http/1.1'],
+            encrypted: true,
+          },
+        })
+
+        render(<FlowDetail {...props} />)
+
+        expect(screen.getByText('ALPN')).toBeInTheDocument()
+        expect(screen.getByText('h2, http/1.1')).toBeInTheDocument()
+      })
+
+      it('displays single ALPN protocol', () => {
+        const props = createDefaultProps()
+        props.flow = createMockTLSFlow({
+          tls: {
+            version: 'TLS 1.3',
+            sni: 'example.com',
+            cipherSuite: 'TLS_AES_256_GCM_SHA384',
+            alpn: ['h2'],
+            encrypted: true,
+          },
+        })
+
+        render(<FlowDetail {...props} />)
+
+        expect(screen.getByText('h2')).toBeInTheDocument()
+      })
+
+      it('does not display ALPN when array is empty', () => {
+        const props = createDefaultProps()
+        props.flow = createMockTLSFlow({
+          tls: {
+            version: 'TLS 1.3',
+            sni: 'example.com',
+            cipherSuite: 'TLS_AES_256_GCM_SHA384',
+            alpn: [],
+            encrypted: true,
+          },
+        })
+
+        render(<FlowDetail {...props} />)
+
+        expect(screen.queryByText('ALPN')).not.toBeInTheDocument()
+      })
+
+      it('does not display ALPN when not present', () => {
+        const props = createDefaultProps()
+        props.flow = createMockTLSFlow({
+          tls: {
+            version: 'TLS 1.3',
+            sni: 'example.com',
+            cipherSuite: 'TLS_AES_256_GCM_SHA384',
+            alpn: undefined,
+            encrypted: true,
+          },
+        })
+
+        render(<FlowDetail {...props} />)
+
+        expect(screen.queryByText('ALPN')).not.toBeInTheDocument()
+      })
+    })
+
+    describe('encryption notice', () => {
+      it('shows encrypted payload notice for TLS flows', () => {
+        const props = createDefaultProps()
+        props.flow = createMockTLSFlow()
+
+        render(<FlowDetail {...props} />)
+
+        expect(screen.getByText(/Payload is encrypted/)).toBeInTheDocument()
+        expect(screen.getByText(/Only metadata is available/)).toBeInTheDocument()
+      })
+    })
+  })
 })
