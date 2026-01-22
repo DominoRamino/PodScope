@@ -144,7 +144,7 @@ func (s *Session) deployHub(ctx context.Context) error {
 	// Create ClusterRole with permissions for terminal exec
 	clusterRole := &rbacv1.ClusterRole{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: fmt.Sprintf("podscope-hub-%s", s.id),
+			Name:   fmt.Sprintf("podscope-hub-%s", s.id),
 			Labels: labels,
 		},
 		Rules: []rbacv1.PolicyRule{
@@ -168,7 +168,7 @@ func (s *Session) deployHub(ctx context.Context) error {
 	// Create ClusterRoleBinding
 	clusterRoleBinding := &rbacv1.ClusterRoleBinding{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: fmt.Sprintf("podscope-hub-%s", s.id),
+			Name:   fmt.Sprintf("podscope-hub-%s", s.id),
 			Labels: labels,
 		},
 		RoleRef: rbacv1.RoleRef{
@@ -375,6 +375,7 @@ func (s *Session) InjectAgent(ctx context.Context, target PodTarget, privileged 
 			Image:           GetAgentImage(),
 			ImagePullPolicy: corev1.PullIfNotPresent,
 			SecurityContext: securityContext,
+			// Note: Resource limits cannot be set on ephemeral containers (Kubernetes limitation)
 			Env: []corev1.EnvVar{
 				{
 					Name:  "HUB_ADDRESS",
@@ -545,8 +546,23 @@ func (s *Session) Cleanup(ctx context.Context) error {
 		close(s.stopChan)
 	}
 
-	// Delete the session namespace (this cascades to all resources)
-	err := s.client.clientset.CoreV1().Namespaces().Delete(ctx, s.namespace, metav1.DeleteOptions{})
+	// Clean up cluster-scoped RBAC resources (not deleted by namespace cascade)
+	rbacName := fmt.Sprintf("podscope-hub-%s", s.id)
+
+	// Delete ClusterRoleBinding first (depends on ClusterRole)
+	err := s.client.clientset.RbacV1().ClusterRoleBindings().Delete(ctx, rbacName, metav1.DeleteOptions{})
+	if err != nil && !errors.IsNotFound(err) {
+		fmt.Fprintf(os.Stderr, "Warning: failed to delete ClusterRoleBinding %s: %v\n", rbacName, err)
+	}
+
+	// Delete ClusterRole after ClusterRoleBinding
+	err = s.client.clientset.RbacV1().ClusterRoles().Delete(ctx, rbacName, metav1.DeleteOptions{})
+	if err != nil && !errors.IsNotFound(err) {
+		fmt.Fprintf(os.Stderr, "Warning: failed to delete ClusterRole %s: %v\n", rbacName, err)
+	}
+
+	// Delete the session namespace (this cascades to namespace-scoped resources)
+	err = s.client.clientset.CoreV1().Namespaces().Delete(ctx, s.namespace, metav1.DeleteOptions{})
 	if err != nil && !errors.IsNotFound(err) {
 		return fmt.Errorf("failed to delete namespace: %w", err)
 	}
