@@ -126,6 +126,66 @@ make dev-quick
 make dev-ui
 ```
 
+### Running Tests
+
+#### Go Backend Tests
+
+```bash
+# Run all Go tests
+make test
+
+# Run tests with verbose output
+go test -v ./pkg/...
+
+# Run specific package tests
+go test -v ./pkg/hub/...      # Hub server tests
+go test -v ./pkg/agent/...    # Agent/capture tests
+go test -v ./pkg/k8s/...      # Kubernetes client tests
+
+# Run specific test by name
+go test -v ./pkg/hub/... -run TestHandleFlows
+go test -v ./pkg/agent/... -run TestFlowKey
+go test -v ./pkg/k8s/... -run TestInjectAgent
+
+# Run with race detection
+go test -race ./pkg/...
+```
+
+#### React UI Tests
+
+```bash
+# Navigate to UI directory
+cd ui
+
+# Run tests in watch mode
+npm test
+
+# Run tests once (CI mode)
+npm test -- --run
+
+# Run specific test file
+npm test -- --run App
+npm test -- --run FlowList
+npm test -- --run Header
+
+# Run with coverage report
+npm run test:coverage
+```
+
+#### Test Coverage
+
+| Package | Description |
+|---------|-------------|
+| `pkg/hub/flowbuffer_test.go` | Ring buffer for flow storage |
+| `pkg/hub/pcap_test.go` | PCAP encoding and file operations |
+| `pkg/hub/server_test.go` | HTTP API endpoints |
+| `pkg/agent/assembler_test.go` | TCP reassembly, protocol detection |
+| `pkg/agent/capture_test.go` | PCAP packet encoding |
+| `pkg/agent/client_test.go` | Hub client connection |
+| `pkg/k8s/session_test.go` | Session lifecycle, agent injection |
+| `pkg/k8s/client_test.go` | Pod lookup, cleanup |
+| `ui/src/__tests__/` | React component tests |
+
 ### Project Structure
 
 ```
