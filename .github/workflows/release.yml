@@ -1,0 +1,116 @@
+name: Release
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+jobs:
+  release:
+    # Only run if PR was merged (not just closed)
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+      packages: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Get version info
+        id: version
+        run: |
+          VERSION=$(cat VERSION)
+          GIT_COMMIT=$(git rev-parse --short HEAD)
+          BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "git_commit=${GIT_COMMIT}" >> $GITHUB_OUTPUT
+          echo "build_date=${BUILD_DATE}" >> $GITHUB_OUTPUT
+          echo "tag=v${VERSION}" >> $GITHUB_OUTPUT
+
+      - name: Build CLI for Linux amd64
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+            -ldflags "-X github.com/podscope/podscope/pkg/cli.Version=${{ steps.version.outputs.version }} \
+                      -X github.com/podscope/podscope/pkg/k8s.DefaultImageTag=${{ steps.version.outputs.git_commit }}" \
+            -o podscope-linux-amd64 \
+            ./cmd/podscope
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push Hub image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.hub
+          platforms: linux/amd64
+          push: true
+          tags: |
+            dominoramino/podscope:${{ steps.version.outputs.version }}
+            dominoramino/podscope:${{ steps.version.outputs.git_commit }}
+            dominoramino/podscope:latest
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
+            BUILD_DATE=${{ steps.version.outputs.build_date }}
+            GIT_COMMIT=${{ steps.version.outputs.git_commit }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push Agent image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.agent
+          platforms: linux/amd64
+          push: true
+          tags: |
+            dominoramino/podscope-agent:${{ steps.version.outputs.version }}
+            dominoramino/podscope-agent:${{ steps.version.outputs.git_commit }}
+            dominoramino/podscope-agent:latest
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
+            BUILD_DATE=${{ steps.version.outputs.build_date }}
+            GIT_COMMIT=${{ steps.version.outputs.git_commit }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: PodScope ${{ steps.version.outputs.version }}
+          body: |
+            ## PodScope ${{ steps.version.outputs.version }}
+
+            ### Docker Images
+            ```bash
+            docker pull dominoramino/podscope:${{ steps.version.outputs.version }}
+            docker pull dominoramino/podscope-agent:${{ steps.version.outputs.version }}
+            ```
+
+            ### CLI Installation
+            Download the `podscope-linux-amd64` binary below and add it to your PATH.
+
+            ```bash
+            chmod +x podscope-linux-amd64
+            sudo mv podscope-linux-amd64 /usr/local/bin/podscope
+            ```
+          files: |
+            podscope-linux-amd64
+          generate_release_notes: true
