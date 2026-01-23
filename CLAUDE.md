@@ -462,3 +462,155 @@ make proto    # Requires protoc, protoc-gen-go, protoc-gen-go-grpc
 - Struct tags: `json:"fieldName"` for JSON serialization
 - Concurrency: use `sync.RWMutex` for read-heavy data structures (flows, PCAP buffer)
 - Resource cleanup: always defer cleanup in CLI, use context cancellation for goroutines
+
+## UI Design System: "Precision Observatory"
+
+The UI follows a sophisticated dark theme inspired by scientific visualization and observatory control panels - the feeling of watching network traffic through a precision instrument.
+
+### Design Philosophy
+
+- **Bold but intentional**: Deep blacks with bioluminescent cyan accents
+- **Data-first**: Typography and layout optimized for scanning network flows
+- **Subtle depth**: Glass effects, noise textures, and layered backgrounds create atmosphere without distraction
+
+### Color Palette (defined in `tailwind.config.js`)
+
+```
+Backgrounds (void):
+  void-950: #050508  (deepest - main background)
+  void-900: #080810  (primary surfaces)
+  void-800: #0c0c18  (cards, elevated surfaces)
+  void-700: #141426  (borders, subtle elements)
+  void-600: #1a1a30  (hover states)
+
+Primary Accent (glow):
+  glow-400: #00ffd5  (primary cyan - buttons, highlights, active states)
+  glow-500: #00e4c4  (hover states)
+  glow-600: #00baa3  (pressed states)
+
+Status Colors:
+  status-success: #00ffa3  (HTTP 2xx, closed connections)
+  status-warning: #ffd000  (HTTP 4xx, timeouts)
+  status-error:   #ff4757  (HTTP 5xx, resets)
+  status-info:    #00d4ff  (TCP, informational)
+
+Protocol Colors:
+  HTTP:  emerald-400 (#34d399) - green tint
+  HTTPS/TLS: amber-400 (#fbbf24) - gold/secure
+  TCP:   blue-400 (#60a5fa) - neutral blue
+```
+
+### Typography
+
+```
+Display/UI: Sora (Google Fonts)
+  - Geometric sans-serif with distinctive character
+  - Used for headings, labels, buttons
+  - Weights: 400 (body), 500 (labels), 600 (headings), 700 (emphasis)
+
+Monospace: JetBrains Mono (Google Fonts)
+  - Used for ALL data: IPs, ports, timestamps, sizes, code, IDs
+  - Clear distinction between similar characters (0/O, 1/l)
+  - Weights: 400 (data), 500 (emphasis), 600 (headers)
+```
+
+### Component Classes (defined in `index.css`)
+
+```css
+/* Glass card - primary container style */
+.glass-card - Semi-transparent background with blur and subtle glow border
+
+/* Buttons */
+.btn-primary   - Gradient cyan, dark text, glow on hover
+.btn-secondary - Dark with border, glows on hover
+.btn-ghost     - Transparent, icon-friendly, subtle hover
+.btn-danger    - Red-tinted for destructive actions
+
+/* Form elements */
+.input-field   - Dark input with glow focus ring
+
+/* Data display */
+.status-badge  - Protocol/status pills with semantic colors
+.protocol-http, .protocol-https, .protocol-tcp - Protocol-specific styling
+
+/* Effects */
+.glow-text     - Text with cyan glow shadow
+.pulse-dot     - Animated live indicator
+.divider       - Gradient horizontal rule
+```
+
+### Visual Effects
+
+1. **Noise overlay** (`noise-overlay` class): Subtle grain texture over entire UI
+2. **Grid pattern** (`grid-bg` class): Faint cyan grid lines in background
+3. **Radial glow** (`glow-bg` class): Soft glow emanating from header area
+4. **Row hover** (`row-glow` class): Sweep effect on table row hover
+
+### Animation Patterns
+
+- `animate-pulse-glow`: Pulsing opacity for live indicators
+- `animate-fade-in`: Entrance fade (0.3s)
+- `animate-slide-in`: Slide from right (detail panel)
+- `animate-slide-up`: Slide from bottom (filter panel)
+- Stagger classes: `.stagger-1` through `.stagger-6` for sequential reveals
+
+### Key UI Components
+
+**Header** (`components/Header.tsx`):
+- Logo with gradient icon and pulsing live indicator
+- Search bar with glow focus state
+- Stats pills (flow count, PCAP size)
+- Collapsible filter panel with protocol chips and BPF input
+
+**FlowList** (`components/FlowList.tsx`):
+- Virtualized for performance (1000+ flows)
+- Server/Globe icons for source/destination
+- Lock icon for encrypted traffic (HTTPS/TLS)
+- Protocol badges with semantic colors
+- Status codes with HTTP-aware coloring
+
+**FlowDetail** (`components/FlowDetail.tsx`):
+- Glass card sections for visual hierarchy
+- Quick stats row at top
+- Connection visualization with source/destination cards
+- Timing bar with TCP/TLS/TTFB breakdown
+- HTTP request/response with headers tables
+
+**Terminal** (`components/Terminal.tsx`):
+- xterm.js with matching color scheme
+- Cyan cursor matching glow accent
+- Gradient background matching void palette
+
+### Demo Mode
+
+For UI development without a running Hub:
+
+```typescript
+// In App.tsx
+const DEMO_MODE = import.meta.env.DEV && !window.location.port?.includes('8')
+```
+
+- Auto-enables on Vite dev server (port 5173)
+- Auto-disables when port contains '8' (Hub ports 8080, 8899)
+- Loads mock flows from `lib/mockData.ts`
+- Simulates new flows arriving every 3 seconds
+
+Run `npm run dev` in `ui/` directory to preview with mock data.
+
+### Design Considerations for Future Changes
+
+1. **Color changes**: Update `tailwind.config.js` colors - all components use semantic names (void, glow, status)
+
+2. **Adding new status colors**: Add to `tailwind.config.js` under `status`, then use as `text-status-{name}` or `bg-status-{name}/10`
+
+3. **New protocol types**: Add protocol class in `index.css` following `.protocol-http` pattern
+
+4. **Component consistency**: Always use the defined button classes (`btn-primary`, etc.) and `glass-card` for containers
+
+5. **Animations**: Keep animations subtle and fast (<0.3s) - this is a data tool, not a marketing site
+
+6. **Typography**: Data should ALWAYS be monospace (`font-mono` class). Never use proportional fonts for IPs, ports, sizes, or timestamps
+
+7. **Spacing**: Use Tailwind's spacing scale. Prefer `gap-` over margin for flex/grid layouts
+
+8. **Icons**: Use Lucide React icons exclusively. Keep icons small (w-3.5 to w-5) to not overpower data

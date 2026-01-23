@@ -2,7 +2,7 @@ import { useEffect, useRef, useCallback } from 'react'
 import { Terminal as XTerm } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
-import { X, Maximize2, Minimize2 } from 'lucide-react'
+import { X, Maximize2, Minimize2, Terminal as TerminalIcon } from 'lucide-react'
 import '@xterm/xterm/css/xterm.css'
 
 interface TerminalProps {
@@ -42,33 +42,36 @@ export function Terminal({
   useEffect(() => {
     if (!terminalRef.current) return
 
-    // Initialize xterm
+    // Initialize xterm with custom theme matching our design
     const term = new XTerm({
       cursorBlink: true,
-      fontSize: 14,
-      fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+      fontSize: 13,
+      fontFamily: '"JetBrains Mono", "Fira Code", Menlo, Monaco, "Courier New", monospace',
+      lineHeight: 1.4,
+      letterSpacing: 0,
       theme: {
-        background: '#1e293b',
+        background: '#080810',
         foreground: '#e2e8f0',
-        cursor: '#22d3ee',
-        cursorAccent: '#1e293b',
-        selectionBackground: '#475569',
-        black: '#1e293b',
-        red: '#f87171',
-        green: '#4ade80',
-        yellow: '#facc15',
-        blue: '#60a5fa',
+        cursor: '#00ffd5',
+        cursorAccent: '#080810',
+        selectionBackground: 'rgba(0, 255, 213, 0.2)',
+        selectionForeground: '#ffffff',
+        black: '#0c0c18',
+        red: '#ff4757',
+        green: '#00ffa3',
+        yellow: '#ffd000',
+        blue: '#00d4ff',
         magenta: '#c084fc',
-        cyan: '#22d3ee',
+        cyan: '#00ffd5',
         white: '#f1f5f9',
-        brightBlack: '#475569',
-        brightRed: '#fca5a5',
-        brightGreen: '#86efac',
-        brightYellow: '#fde047',
-        brightBlue: '#93c5fd',
+        brightBlack: '#1a1a30',
+        brightRed: '#ff6b7a',
+        brightGreen: '#5cffbc',
+        brightYellow: '#ffe066',
+        brightBlue: '#66e0ff',
         brightMagenta: '#d8b4fe',
-        brightCyan: '#67e8f9',
-        brightWhite: '#f8fafc',
+        brightCyan: '#5cfffc',
+        brightWhite: '#ffffff',
       },
       allowProposedApi: true,
     })
@@ -96,8 +99,8 @@ export function Terminal({
     wsRef.current = ws
 
     ws.onopen = () => {
-      term.writeln('\x1b[32mConnected to agent terminal\x1b[0m')
-      term.writeln(`\x1b[90mPod: ${namespace}/${podName}\x1b[0m`)
+      term.writeln('\x1b[38;2;0;255;213m● Connected to agent terminal\x1b[0m')
+      term.writeln(`\x1b[90m  Pod: ${namespace}/${podName}\x1b[0m`)
       term.writeln('')
 
       // Send initial size
@@ -113,11 +116,11 @@ export function Terminal({
     }
 
     ws.onerror = () => {
-      term.writeln('\x1b[31mWebSocket error\x1b[0m')
+      term.writeln('\x1b[38;2;255;71;87m● WebSocket error\x1b[0m')
     }
 
     ws.onclose = () => {
-      term.writeln('\x1b[33m\r\nConnection closed\x1b[0m')
+      term.writeln('\x1b[38;2;255;208;0m\r\n● Connection closed\x1b[0m')
     }
 
     // Send input to WebSocket
@@ -138,7 +141,7 @@ export function Terminal({
           fitAddonRef.current.fit()
           sendResize(xtermRef.current.cols, xtermRef.current.rows)
         }
-      }, 100) // Debounce 100ms
+      }, 100)
     })
 
     if (terminalRef.current) {
@@ -157,41 +160,52 @@ export function Terminal({
   }, [namespace, podName, container, sendResize])
 
   return (
-    <div className="flex flex-col h-full bg-slate-800 border-t border-slate-700">
+    <div className={`flex flex-col h-full bg-void-950 ${isMaximized ? '' : 'border-t border-glow-400/10'}`}>
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-2 bg-slate-900 border-b border-slate-700">
-        <div className="flex items-center gap-2">
-          <span className="text-sm font-medium text-white">Terminal</span>
-          <span className="text-xs text-slate-400">
-            {namespace}/{podName}
-          </span>
+      <div className="flex items-center justify-between px-4 py-3 bg-void-900/80 backdrop-blur-xl border-b border-glow-400/10">
+        <div className="flex items-center gap-3">
+          <div className="w-7 h-7 rounded-lg bg-glow-400/10 flex items-center justify-center">
+            <TerminalIcon className="w-3.5 h-3.5 text-glow-400" />
+          </div>
+          <div>
+            <span className="text-sm font-medium text-white">Terminal</span>
+            <span className="text-xs text-gray-500 ml-3 font-mono">
+              {namespace}/{podName}
+            </span>
+          </div>
         </div>
         <div className="flex items-center gap-1">
           {onToggleMaximize && (
             <button
               onClick={onToggleMaximize}
-              className="p-1.5 hover:bg-slate-700 rounded transition-colors"
+              className="btn-ghost p-2"
               title={isMaximized ? 'Minimize' : 'Maximize'}
             >
               {isMaximized ? (
-                <Minimize2 className="w-4 h-4 text-slate-400" />
+                <Minimize2 className="w-4 h-4" />
               ) : (
-                <Maximize2 className="w-4 h-4 text-slate-400" />
+                <Maximize2 className="w-4 h-4" />
               )}
             </button>
           )}
           <button
             onClick={onClose}
-            className="p-1.5 hover:bg-slate-700 rounded transition-colors"
+            className="btn-ghost p-2 hover:text-status-error hover:bg-status-error/10"
             title="Close terminal"
           >
-            <X className="w-4 h-4 text-slate-400" />
+            <X className="w-4 h-4" />
           </button>
         </div>
       </div>
 
-      {/* Terminal */}
-      <div ref={terminalRef} className="flex-1 p-2 overflow-hidden" />
+      {/* Terminal container */}
+      <div
+        ref={terminalRef}
+        className="flex-1 p-3 overflow-hidden"
+        style={{
+          background: 'linear-gradient(180deg, #080810 0%, #050508 100%)'
+        }}
+      />
     </div>
   )
 }
