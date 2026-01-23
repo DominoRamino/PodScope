@@ -1,4 +1,4 @@
-import { Search, Download, Pause, Play, Filter, ChevronDown, Sparkles, HardDrive, Activity, Waves, Trash2 } from 'lucide-react'
+import { Search, Download, Pause, Play, Filter, ChevronDown, Sparkles, HardDrive, Activity, Waves, Trash2, X, Check } from 'lucide-react'
 import { useState, useRef, useEffect } from 'react'
 import { formatBytes } from '../utils'
 import { bpfPresets, type BPFPreset } from '../lib/bpfPresets'
@@ -63,6 +63,25 @@ export function Header({
     }
     document.addEventListener('mousedown', handleClickOutside)
     return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
+
+  // Fetch current BPF filter from server on mount (persists across refreshes)
+  useEffect(() => {
+    const fetchCurrentFilter = async () => {
+      try {
+        const res = await fetch('/api/bpf-filter')
+        if (res.ok) {
+          const data = await res.json()
+          if (data.filter) {
+            setCurrentBPFFilter(data.filter)
+            setBpfFilter(data.filter)
+          }
+        }
+      } catch (err) {
+        console.error('Failed to fetch current BPF filter:', err)
+      }
+    }
+    fetchCurrentFilter()
   }, [])
 
   const handleSelectPreset = (preset: BPFPreset) => {
@@ -357,17 +376,19 @@ Rules:
               </button>
 
               {currentBPFFilter && (
-                <>
+                <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-glow-400/10 border border-glow-400/30 max-w-[280px]">
+                  <Check className="w-3 h-3 text-glow-400 flex-shrink-0" />
+                  <code className="text-xs text-glow-400 font-mono truncate" title={currentBPFFilter}>
+                    {currentBPFFilter}
+                  </code>
                   <button
                     onClick={handleClearBPFFilter}
-                    className="px-3 py-1.5 rounded-lg text-xs font-medium text-status-error bg-status-error/10 border border-status-error/20 hover:bg-status-error/20 transition-all"
+                    className="p-0.5 rounded hover:bg-glow-400/20 text-glow-400/60 hover:text-glow-400 transition-colors flex-shrink-0"
+                    title="Clear filter"
                   >
-                    Clear
+                    <X className="w-3 h-3" />
                   </button>
-                  <span className="text-xs text-glow-400 font-mono truncate max-w-[200px]" title={currentBPFFilter}>
-                    Active: {currentBPFFilter}
-                  </span>
-                </>
+                </div>
               )}
             </div>
           </div>
