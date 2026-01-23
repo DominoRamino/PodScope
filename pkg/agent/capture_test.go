@@ -464,3 +464,129 @@ func TestWritePCAPPacket_MultiplePackets(t *testing.T) {
 		t.Errorf("Second packet data mismatch")
 	}
 }
+
+// =====================================================================
+// Tests for BPF Filter behavior
+// =====================================================================
+
+// TestSetBPFFilter_StoresDefaultFilter verifies SetBPFFilter stores the filter as default
+func TestSetBPFFilter_StoresDefaultFilter(t *testing.T) {
+	c := &Capturer{}
+
+	hubExclusion := "not (host 10.96.0.100 and (port 8080 or port 9090))"
+	c.SetBPFFilter(hubExclusion)
+
+	if c.bpfFilter != hubExclusion {
+		t.Errorf("Expected bpfFilter %q, got %q", hubExclusion, c.bpfFilter)
+	}
+	if c.defaultBPFFilter != hubExclusion {
+		t.Errorf("Expected defaultBPFFilter %q, got %q", hubExclusion, c.defaultBPFFilter)
+	}
+}
+
+// TestBuildCombinedFilter_EmptyUserFilter_ReturnsDefaultFilter verifies empty user filter uses default
+func TestBuildCombinedFilter_EmptyUserFilter_ReturnsDefaultFilter(t *testing.T) {
+	c := &Capturer{}
+	defaultFilter := "not (host 10.96.0.100 and (port 8080 or port 9090))"
+	c.SetBPFFilter(defaultFilter)
+
+	combined := c.BuildCombinedFilter("")
+
+	if combined != defaultFilter {
+		t.Errorf("Expected %q, got %q", defaultFilter, combined)
+	}
+}
+
+// TestBuildCombinedFilter_UserFilter_CombinesWithDefault verifies user filter is combined with default
+func TestBuildCombinedFilter_UserFilter_CombinesWithDefault(t *testing.T) {
+	c := &Capturer{}
+	defaultFilter := "not (host 10.96.0.100 and (port 8080 or port 9090))"
+	c.SetBPFFilter(defaultFilter)
+
+	userFilter := "tcp port 80"
+	combined := c.BuildCombinedFilter(userFilter)
+
+	// Should combine: (user filter) and (default filter)
+	expected := "(tcp port 80) and (not (host 10.96.0.100 and (port 8080 or port 9090)))"
+	if combined != expected {
+		t.Errorf("Expected %q, got %q", expected, combined)
+	}
+}
+
+// TestBuildCombinedFilter_ComplexUserFilter_CombinesCorrectly verifies complex filters combine
+func TestBuildCombinedFilter_ComplexUserFilter_CombinesCorrectly(t *testing.T) {
+	c := &Capturer{}
+	defaultFilter := "not (host 10.96.0.100 and (port 8080 or port 9090))"
+	c.SetBPFFilter(defaultFilter)
+
+	userFilter := "tcp port 80 or tcp port 443"
+	combined := c.BuildCombinedFilter(userFilter)
+
+	// Should wrap user filter in parens to preserve logic
+	expected := "(tcp port 80 or tcp port 443) and (not (host 10.96.0.100 and (port 8080 or port 9090)))"
+	if combined != expected {
+		t.Errorf("Expected %q, got %q", expected, combined)
+	}
+}
+
+// TestBuildCombinedFilter_NoDefaultFilter_ReturnsUserFilter verifies user filter returned when no default
+func TestBuildCombinedFilter_NoDefaultFilter_ReturnsUserFilter(t *testing.T) {
+	c := &Capturer{}
+	// No default filter set
+
+	userFilter := "tcp port 80"
+	combined := c.BuildCombinedFilter(userFilter)
+
+	if combined != userFilter {
+		t.Errorf("Expected %q, got %q", userFilter, combined)
+	}
+}
+
+// TestBuildCombinedFilter_NoDefaultNoUser_ReturnsEmpty verifies empty when both empty
+func TestBuildCombinedFilter_NoDefaultNoUser_ReturnsEmpty(t *testing.T) {
+	c := &Capturer{}
+
+	combined := c.BuildCombinedFilter("")
+
+	if combined != "" {
+		t.Errorf("Expected empty string, got %q", combined)
+	}
+}
+
+// TestBuildCombinedFilter_PreservesHubExclusion verifies hub exclusion always included
+func TestBuildCombinedFilter_PreservesHubExclusion(t *testing.T) {
+	c := &Capturer{}
+	hubExclusion := "not (host 10.96.0.100 and (port 8080 or port 9090))"
+	c.SetBPFFilter(hubExclusion)
+
+	testCases := []struct {
+		name       string
+		userFilter string
+	}{
+		{"not port 53", "not port 53"},
+		{"http/https only", "tcp port 80 or tcp port 443"},
+		{"tcp syn only", "tcp[tcpflags] & tcp-syn != 0"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			combined := c.BuildCombinedFilter(tc.userFilter)
+
+			// Combined filter MUST contain the hub exclusion
+			if !containsSubstring(combined, "host 10.96.0.100") {
+				t.Errorf("Combined filter missing hub IP exclusion: %q", combined)
+			}
+			if !containsSubstring(combined, "port 8080") {
+				t.Errorf("Combined filter missing port 8080 exclusion: %q", combined)
+			}
+			if !containsSubstring(combined, "port 9090") {
+				t.Errorf("Combined filter missing port 9090 exclusion: %q", combined)
+			}
+		})
+	}
+}
+
+// containsSubstring checks if s contains substr
+func containsSubstring(s, substr string) bool {
+	return bytes.Contains([]byte(s), []byte(substr))
+}
