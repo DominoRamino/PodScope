@@ -7,8 +7,8 @@ on:
 
 jobs:
   release:
-    # Only run if PR was merged (not just closed)
-    if: github.event.pull_request.merged == true
+    # Only run if PR was merged AND has the 'release' label
+    if: github.event.pull_request.merged == true && contains(github.event.pull_request.labels.*.name, 'release')
     runs-on: ubuntu-latest
 
     permissions:
@@ -63,7 +63,6 @@ jobs:
           push: true
           tags: |
             dominoramino/podscope:${{ steps.version.outputs.version }}
-            dominoramino/podscope:${{ steps.version.outputs.git_commit }}
             dominoramino/podscope:latest
           build-args: |
             VERSION=${{ steps.version.outputs.version }}
@@ -81,7 +80,6 @@ jobs:
           push: true
           tags: |
             dominoramino/podscope-agent:${{ steps.version.outputs.version }}
-            dominoramino/podscope-agent:${{ steps.version.outputs.git_commit }}
             dominoramino/podscope-agent:latest
           build-args: |
             VERSION=${{ steps.version.outputs.version }}
