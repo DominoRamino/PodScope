@@ -18,14 +18,15 @@ import (
 const staleSessionMaxAge = 1 * time.Hour
 
 var (
-	namespace       string
-	labelSelector   string
-	podName         string
-	allNamespaces   bool
-	forcePrivileged bool
-	hubPort         int
-	uiPort          int
-	targetContainer string
+	namespace        string
+	labelSelector    string
+	podName          string
+	allNamespaces    bool
+	forcePrivileged  bool
+	hubPort          int
+	uiPort           int
+	targetContainer  string
+	anthropicAPIKey  string
 )
 
 var tapCmd = &cobra.Command{
@@ -54,6 +55,7 @@ func init() {
 	tapCmd.Flags().IntVar(&hubPort, "hub-port", 8080, "Port for the Hub gRPC server")
 	tapCmd.Flags().IntVar(&uiPort, "ui-port", 8899, "Local port for the UI (via port-forward)")
 	tapCmd.Flags().StringVarP(&targetContainer, "target", "t", "", "Container to share process namespace with (defaults to first container)")
+	tapCmd.Flags().StringVar(&anthropicAPIKey, "anthropic-api-key", "", "Anthropic API key for AI features (can also use ANTHROPIC_API_KEY env var)")
 }
 
 func runTap(cmd *cobra.Command, args []string) error {
@@ -84,8 +86,17 @@ func runTap(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(os.Stderr, "Warning: failed to cleanup orphaned RBAC resources: %v\n", err)
 	}
 
-	// Create session manager
-	session, err := k8s.NewSession(k8sClient)
+	// Resolve Anthropic API key (flag takes precedence over env var)
+	apiKey := anthropicAPIKey
+	if apiKey == "" {
+		apiKey = os.Getenv("ANTHROPIC_API_KEY")
+	}
+
+	// Create session manager with options
+	sessionOpts := k8s.SessionOptions{
+		AnthropicAPIKey: apiKey,
+	}
+	session, err := k8s.NewSession(k8sClient, sessionOpts)
 	if err != nil {
 		return fmt.Errorf("failed to create session: %w", err)
 	}

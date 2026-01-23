@@ -53,3 +53,4 @@ BUILD_NUMBER
 
 # PCAP files
 *.pcap
+tasks/*

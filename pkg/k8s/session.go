@@ -44,26 +44,52 @@ func GetHubImage() string {
 	return fmt.Sprintf("podscope:%s", DefaultImageTag)
 }
 
+// SessionOptions contains optional configuration for a session
+type SessionOptions struct {
+	AnthropicAPIKey string // API key for AI features in the Hub
+}
+
 // Session manages a PodScope capture session
 type Session struct {
-	client        *Client
-	id            string
-	namespace     string
-	hubService    string
-	portForwarder *portforward.PortForwarder
-	stopChan      chan struct{}
+	client          *Client
+	id              string
+	namespace       string
+	hubService      string
+	portForwarder   *portforward.PortForwarder
+	stopChan        chan struct{}
+	anthropicAPIKey string
 }
 
 // NewSession creates a new capture session
-func NewSession(client *Client) (*Session, error) {
+func NewSession(client *Client, opts SessionOptions) (*Session, error) {
 	id := uuid.New().String()[:8]
 	return &Session{
-		client:     client,
-		id:         id,
-		namespace:  fmt.Sprintf("podscope-%s", id),
-		hubService: "podscope-hub",
-		stopChan:   make(chan struct{}),
+		client:          client,
+		id:              id,
+		namespace:       fmt.Sprintf("podscope-%s", id),
+		hubService:      "podscope-hub",
+		stopChan:        make(chan struct{}),
+		anthropicAPIKey: opts.AnthropicAPIKey,
 	}, nil
+}
+
+// getHubEnvVars returns the environment variables for the Hub deployment
+func (s *Session) getHubEnvVars() []corev1.EnvVar {
+	envVars := []corev1.EnvVar{
+		{
+			Name:  "SESSION_ID",
+			Value: s.id,
+		},
+	}
+
+	if s.anthropicAPIKey != "" {
+		envVars = append(envVars, corev1.EnvVar{
+			Name:  "ANTHROPIC_API_KEY",
+			Value: s.anthropicAPIKey,
+		})
+	}
+
+	return envVars
 }
 
 // Start initializes the session by creating namespace and deploying hub
@@ -234,12 +260,7 @@ func (s *Session) deployHub(ctx context.Context) error {
 									corev1.ResourceMemory: resource.MustParse("512Mi"),
 								},
 							},
-							Env: []corev1.EnvVar{
-								{
-									Name:  "SESSION_ID",
-									Value: s.id,
-								},
-							},
+							Env: s.getHubEnvVars(),
 							VolumeMounts: []corev1.VolumeMount{
 								{
 									Name:      "pcap-storage",
