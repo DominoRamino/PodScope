@@ -1,36 +1,235 @@
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Sora:wght@300;400;500;600;700&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  --glow-primary: #00ffd5;
+  --glow-secondary: #00e4c4;
+  --void-deep: #050508;
+  --void-base: #080810;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  font-size: 14px;
+}
+
 body {
   margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
-    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
-    sans-serif;
+  font-family: 'Sora', system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  background-color: var(--void-deep);
+  color: #e2e8f0;
 }
 
-code {
-  font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
-    monospace;
+code, .font-mono {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
 }
 
-/* Custom scrollbar */
+/* Custom scrollbar - minimal and glowing */
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
 }
 
 ::-webkit-scrollbar-track {
-  background: #1e293b;
+  background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #475569;
-  border-radius: 4px;
+  background: rgba(0, 255, 213, 0.2);
+  border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #64748b;
+  background: rgba(0, 255, 213, 0.4);
+}
+
+/* Selection */
+::selection {
+  background: rgba(0, 255, 213, 0.3);
+  color: #fff;
+}
+
+/* Focus states */
+*:focus-visible {
+  outline: 1px solid var(--glow-primary);
+  outline-offset: 2px;
+}
+
+/* Glass card effect */
+@layer components {
+  .glass-card {
+    @apply bg-void-800/60 backdrop-blur-xl border border-glow-400/10 rounded-xl;
+  }
+
+  .glass-card-hover {
+    @apply glass-card transition-all duration-200 hover:border-glow-400/30 hover:shadow-glow-sm;
+  }
+
+  .glow-border {
+    @apply border border-glow-400/30 shadow-glow-sm;
+  }
+
+  .glow-text {
+    @apply text-glow-400;
+    text-shadow: 0 0 10px rgba(0, 255, 213, 0.5);
+  }
+
+  .pulse-dot {
+    @apply w-2 h-2 rounded-full bg-glow-400 animate-pulse-glow;
+    box-shadow: 0 0 8px var(--glow-primary);
+  }
+
+  .status-badge {
+    @apply px-2.5 py-1 rounded-md text-xs font-medium font-mono tracking-wide;
+  }
+
+  .input-field {
+    @apply bg-void-800/80 border border-void-600 rounded-lg px-4 py-2.5 text-sm text-white
+           placeholder-gray-500 focus:outline-none focus:border-glow-400/50 focus:shadow-glow-sm
+           transition-all duration-200;
+  }
+
+  .btn-primary {
+    @apply flex items-center gap-2 px-4 py-2.5 rounded-lg font-medium text-sm
+           bg-gradient-to-r from-glow-500 to-glow-600 text-void-900
+           hover:from-glow-400 hover:to-glow-500 hover:shadow-glow
+           transition-all duration-200 active:scale-95;
+  }
+
+  .btn-secondary {
+    @apply flex items-center gap-2 px-4 py-2.5 rounded-lg font-medium text-sm
+           bg-void-700/80 border border-void-600 text-gray-300
+           hover:border-glow-400/30 hover:text-white hover:shadow-glow-sm
+           transition-all duration-200 active:scale-95;
+  }
+
+  .btn-ghost {
+    @apply flex items-center gap-2 px-3 py-2 rounded-lg font-medium text-sm
+           text-gray-400 hover:text-glow-400 hover:bg-glow-400/10
+           transition-all duration-200;
+  }
+
+  .btn-danger {
+    @apply flex items-center gap-2 px-4 py-2.5 rounded-lg font-medium text-sm
+           bg-status-error/20 border border-status-error/30 text-status-error
+           hover:bg-status-error/30 hover:border-status-error/50
+           transition-all duration-200 active:scale-95;
+  }
+
+  .tag-pill {
+    @apply inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium
+           bg-void-700/80 border border-void-600 text-gray-300;
+  }
+
+  .divider {
+    @apply h-px bg-gradient-to-r from-transparent via-glow-400/20 to-transparent;
+  }
+}
+
+/* Noise texture overlay */
+.noise-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  opacity: 0.015;
+  z-index: 9999;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 400 400' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
+}
+
+/* Animated background grid */
+.grid-bg {
+  background-image:
+    linear-gradient(to right, rgba(0, 255, 213, 0.02) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(0, 255, 213, 0.02) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+
+/* Radial glow effect */
+.glow-bg {
+  position: relative;
+}
+
+.glow-bg::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 100%;
+  max-width: 800px;
+  height: 300px;
+  background: radial-gradient(ellipse at center top, rgba(0, 255, 213, 0.08) 0%, transparent 70%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* Staggered animation delays */
+.stagger-1 { animation-delay: 0.05s; }
+.stagger-2 { animation-delay: 0.1s; }
+.stagger-3 { animation-delay: 0.15s; }
+.stagger-4 { animation-delay: 0.2s; }
+.stagger-5 { animation-delay: 0.25s; }
+.stagger-6 { animation-delay: 0.3s; }
+
+/* Row hover glow effect */
+.row-glow {
+  position: relative;
+}
+
+.row-glow::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(0, 255, 213, 0.05), transparent);
+  opacity: 0;
+  transition: opacity 0.2s;
+  pointer-events: none;
+}
+
+.row-glow:hover::before {
+  opacity: 1;
+}
+
+/* Protocol badge glow effects */
+.protocol-http {
+  @apply bg-emerald-500/15 text-emerald-400 border border-emerald-500/30;
+}
+
+.protocol-https {
+  @apply bg-amber-500/15 text-amber-400 border border-amber-500/30;
+}
+
+.protocol-tls {
+  @apply bg-amber-500/15 text-amber-400 border border-amber-500/30;
+}
+
+.protocol-tcp {
+  @apply bg-blue-500/15 text-blue-400 border border-blue-500/30;
+}
+
+/* Animate in on scroll */
+@keyframes reveal {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.reveal {
+  animation: reveal 0.4s ease-out forwards;
 }

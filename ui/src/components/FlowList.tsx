@@ -1,8 +1,8 @@
 import { Flow } from '../types'
-import { ArrowRight, Lock, Server } from 'lucide-react'
+import { ArrowRight, Lock, Radar, Globe, Server } from 'lucide-react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { useRef, memo } from 'react'
-import { formatBytes, formatTime, getProtocolColor, getStatusColor } from '../utils'
+import { formatBytes, formatTime } from '../utils'
 
 interface FlowListProps {
   flows: Flow[]
@@ -16,36 +16,27 @@ export function FlowList({ flows, selectedId, onSelect }: FlowListProps) {
   const rowVirtualizer = useVirtualizer({
     count: flows.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => 52, // Approximate row height in pixels
-    overscan: 10, // Render 10 extra rows outside viewport for smoother scrolling
+    estimateSize: () => 64,
+    overscan: 10,
   })
 
   return (
     <div className="h-full flex flex-col">
       {/* Table Header */}
-      <div className="bg-slate-800 border-b border-slate-700 px-4 py-2 grid grid-cols-12 gap-2 text-xs font-medium text-slate-400 uppercase tracking-wider flex-shrink-0">
-        <div className="col-span-2">Time</div>
+      <div className="bg-void-900/80 backdrop-blur-xl border-b border-glow-400/5 px-6 py-3 grid grid-cols-12 gap-4 text-[11px] font-semibold text-gray-500 uppercase tracking-wider flex-shrink-0">
+        <div className="col-span-2">Timestamp</div>
         <div className="col-span-3">Source</div>
         <div className="col-span-3">Destination</div>
-        <div className="col-span-1">Protocol</div>
-        <div className="col-span-1">Status</div>
-        <div className="col-span-1">Latency</div>
-        <div className="col-span-1">Size</div>
+        <div className="col-span-1 text-center">Protocol</div>
+        <div className="col-span-1 text-center">Status</div>
+        <div className="col-span-1 text-right">Latency</div>
+        <div className="col-span-1 text-right">Size</div>
       </div>
 
       {/* Virtualized Flow Rows */}
-      <div
-        ref={parentRef}
-        className="flex-1 overflow-y-auto"
-      >
+      <div ref={parentRef} className="flex-1 overflow-y-auto">
         {flows.length === 0 ? (
-          <div className="flex items-center justify-center h-full text-slate-500">
-            <div className="text-center">
-              <Server className="w-12 h-12 mx-auto mb-3 opacity-50" />
-              <p>No flows captured yet</p>
-              <p className="text-sm mt-1">Traffic will appear here in real-time</p>
-            </div>
-          </div>
+          <EmptyState />
         ) : (
           <div
             style={{
@@ -72,6 +63,7 @@ export function FlowList({ flows, selectedId, onSelect }: FlowListProps) {
                     flow={flow}
                     selected={flow.id === selectedId}
                     onClick={() => onSelect(flow)}
+                    index={virtualRow.index}
                   />
                 </div>
               )
@@ -83,14 +75,34 @@ export function FlowList({ flows, selectedId, onSelect }: FlowListProps) {
   )
 }
 
+function EmptyState() {
+  return (
+    <div className="flex items-center justify-center h-full">
+      <div className="text-center max-w-md px-8">
+        <div className="w-20 h-20 mx-auto mb-6 rounded-2xl bg-void-800/60 border border-glow-400/10 flex items-center justify-center">
+          <Radar className="w-10 h-10 text-glow-400/40" />
+        </div>
+        <h3 className="text-lg font-medium text-white mb-2">Awaiting Traffic</h3>
+        <p className="text-sm text-gray-500 leading-relaxed">
+          Network flows will appear here in real-time as they're captured from your Kubernetes pods.
+        </p>
+        <div className="mt-6 flex items-center justify-center gap-2 text-xs text-gray-600">
+          <div className="w-1.5 h-1.5 rounded-full bg-glow-400/50 animate-pulse-glow" />
+          <span>Listening for connections...</span>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 interface FlowRowProps {
   flow: Flow
   selected: boolean
   onClick: () => void
+  index: number
 }
 
-// Memoized FlowRow to prevent unnecessary re-renders
-const FlowRowMemo = memo(function FlowRow({ flow, selected, onClick }: FlowRowProps) {
+const FlowRowMemo = memo(function FlowRow({ flow, selected, onClick, index }: FlowRowProps) {
   const getDisplayStatus = (): string => {
     if (flow.http?.statusCode) {
       return `${flow.http.statusCode}`
@@ -99,8 +111,8 @@ const FlowRowMemo = memo(function FlowRow({ flow, selected, onClick }: FlowRowPr
   }
 
   const getLatency = (): string => {
-    if (flow.ttfbMs) return `${flow.ttfbMs.toFixed(1)}ms`
-    if (flow.tcpHandshakeMs) return `${flow.tcpHandshakeMs.toFixed(1)}ms`
+    if (flow.ttfbMs) return `${flow.ttfbMs.toFixed(0)}ms`
+    if (flow.tcpHandshakeMs) return `${flow.tcpHandshakeMs.toFixed(0)}ms`
     return '-'
   }
 
@@ -120,69 +132,115 @@ const FlowRowMemo = memo(function FlowRow({ flow, selected, onClick }: FlowRowPr
   const isEncrypted = flow.protocol === 'HTTPS' || flow.protocol === 'TLS'
   const totalBytes = flow.bytesSent + flow.bytesReceived
 
+  const getProtocolStyle = () => {
+    switch (flow.protocol) {
+      case 'HTTP':
+        return 'protocol-http'
+      case 'HTTPS':
+      case 'TLS':
+        return 'protocol-https'
+      default:
+        return 'protocol-tcp'
+    }
+  }
+
+  const getStatusStyle = () => {
+    if (flow.http?.statusCode) {
+      const code = flow.http.statusCode
+      if (code >= 200 && code < 300) return 'text-status-success'
+      if (code >= 300 && code < 400) return 'text-status-info'
+      if (code >= 400 && code < 500) return 'text-status-warning'
+      return 'text-status-error'
+    }
+    switch (flow.status) {
+      case 'CLOSED': return 'text-status-success'
+      case 'RESET': return 'text-status-error'
+      case 'TIMEOUT': return 'text-status-warning'
+      default: return 'text-status-info'
+    }
+  }
+
   return (
     <div
       onClick={onClick}
       className={`
-        px-4 py-2 grid grid-cols-12 gap-2 text-sm cursor-pointer border-b border-slate-700/50
-        hover:bg-slate-800/50 transition-colors h-full
-        ${selected ? 'bg-podscope-900/30 border-l-2 border-l-podscope-500' : ''}
+        row-glow px-6 py-3 grid grid-cols-12 gap-4 text-sm cursor-pointer border-b border-void-800/50
+        transition-all duration-150 h-full items-center
+        ${selected
+          ? 'bg-glow-400/5 border-l-2 border-l-glow-400'
+          : 'hover:bg-void-800/30 border-l-2 border-l-transparent'
+        }
       `}
+      style={{ animationDelay: `${index * 0.02}s` }}
     >
-      {/* Time */}
-      <div className="col-span-2 text-slate-400 font-mono text-xs">
+      {/* Timestamp */}
+      <div className="col-span-2 font-mono text-xs text-gray-400">
         {formatTime(flow.timestamp)}
       </div>
 
       {/* Source */}
-      <div className="col-span-3 truncate text-slate-300">
-        <div className="flex items-center gap-1">
-          <span className="truncate">{getSource()}</span>
+      <div className="col-span-3 min-w-0">
+        <div className="flex items-center gap-2">
+          <div className="w-5 h-5 rounded-md bg-void-700/80 flex items-center justify-center flex-shrink-0">
+            <Server className="w-3 h-3 text-gray-500" />
+          </div>
+          <div className="min-w-0">
+            <div className="text-sm text-gray-200 truncate">{getSource()}</div>
+            {flow.srcNamespace && (
+              <div className="text-[10px] text-gray-600 truncate">{flow.srcNamespace}</div>
+            )}
+          </div>
         </div>
-        {flow.srcNamespace && (
-          <div className="text-xs text-slate-500 truncate">{flow.srcNamespace}</div>
-        )}
       </div>
 
       {/* Destination */}
-      <div className="col-span-3 truncate">
-        <div className="flex items-center gap-1">
-          <ArrowRight className="w-3 h-3 text-slate-500 flex-shrink-0" />
-          {isEncrypted && <Lock className="w-3 h-3 text-yellow-500 flex-shrink-0" />}
-          <span className="truncate text-slate-300">{getDestination()}</span>
-        </div>
-        {flow.http?.url && flow.http.url !== '/' && (
-          <div className="text-xs text-slate-500 truncate pl-4">
-            {flow.http.method} {flow.http.url}
+      <div className="col-span-3 min-w-0">
+        <div className="flex items-center gap-2">
+          <ArrowRight className="w-3 h-3 text-glow-400/40 flex-shrink-0" />
+          {isEncrypted ? (
+            <div className="w-5 h-5 rounded-md bg-amber-500/10 flex items-center justify-center flex-shrink-0">
+              <Lock className="w-3 h-3 text-amber-400" />
+            </div>
+          ) : (
+            <div className="w-5 h-5 rounded-md bg-void-700/80 flex items-center justify-center flex-shrink-0">
+              <Globe className="w-3 h-3 text-gray-500" />
+            </div>
+          )}
+          <div className="min-w-0">
+            <div className="text-sm text-gray-200 truncate">{getDestination()}</div>
+            {flow.http?.url && flow.http.url !== '/' && (
+              <div className="text-[10px] text-gray-600 truncate">
+                <span className="text-glow-400/60">{flow.http.method}</span> {flow.http.url}
+              </div>
+            )}
           </div>
-        )}
+        </div>
       </div>
 
       {/* Protocol */}
-      <div className="col-span-1">
-        <span className={`px-2 py-0.5 rounded text-xs font-medium ${getProtocolColor(flow.protocol)}`}>
+      <div className="col-span-1 flex justify-center">
+        <span className={`status-badge ${getProtocolStyle()}`}>
           {flow.protocol}
         </span>
       </div>
 
       {/* Status */}
-      <div className={`col-span-1 font-medium ${getStatusColor(flow.status, flow.http?.statusCode)}`}>
+      <div className={`col-span-1 text-center font-mono text-xs font-medium ${getStatusStyle()}`}>
         {getDisplayStatus()}
       </div>
 
       {/* Latency */}
-      <div className="col-span-1 text-slate-400">
+      <div className="col-span-1 text-right font-mono text-xs text-gray-400">
         {getLatency()}
       </div>
 
       {/* Size */}
-      <div className="col-span-1 text-slate-400">
+      <div className="col-span-1 text-right font-mono text-xs text-gray-400">
         {formatBytes(totalBytes)}
       </div>
     </div>
   )
 }, (prev, next) => {
-  // Custom comparison for memoization
   return prev.flow.id === next.flow.id &&
          prev.flow.status === next.flow.status &&
          prev.flow.bytesSent === next.flow.bytesSent &&

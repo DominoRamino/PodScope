@@ -225,12 +225,8 @@ func (a *TCPAssembler) parsePayload(flow *TCPFlow) {
 
 // parseHTTP parses HTTP request/response
 func (a *TCPAssembler) parseHTTP(flow *TCPFlow) {
-	if flow.HTTP != nil {
-		return // Already parsed
-	}
-
-	// Parse request from client data
-	if flow.ClientData.Len() > 0 {
+	// Parse request from client data (only if not already parsed)
+	if flow.HTTP == nil && flow.ClientData.Len() > 0 {
 		req, err := http.ReadRequest(bufio.NewReader(bytes.NewReader(flow.ClientData.Bytes())))
 		if err == nil {
 			flow.HTTP = &protocol.HTTPInfo{
@@ -249,8 +245,8 @@ func (a *TCPAssembler) parseHTTP(flow *TCPFlow) {
 		}
 	}
 
-	// Parse response from server data
-	if flow.HTTP != nil && flow.ServerData.Len() > 0 {
+	// Parse response from server data (only if request parsed and response not yet parsed)
+	if flow.HTTP != nil && flow.HTTP.StatusCode == 0 && flow.ServerData.Len() > 0 {
 		resp, err := http.ReadResponse(bufio.NewReader(bytes.NewReader(flow.ServerData.Bytes())), nil)
 		if err == nil {
 			flow.HTTP.StatusCode = resp.StatusCode

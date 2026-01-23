@@ -7,6 +7,7 @@ import { Header } from '../../components/Header'
 const createDefaultProps = () => ({
   connected: true,
   flowCount: 0,
+  filteredCount: 0,
   pcapSize: 0,
   filter: '',
   onFilterChange: vi.fn(),

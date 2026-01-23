@@ -332,8 +332,11 @@ func (s *Session) waitForHub(ctx context.Context) error {
 	}
 }
 
-// InjectAgent injects a capture agent into a target pod
-func (s *Session) InjectAgent(ctx context.Context, target PodTarget, privileged bool) error {
+// InjectAgent injects a capture agent into a target pod.
+// If targetContainer is empty, it defaults to the first container in the pod.
+// The agent shares the process namespace with the target container, enabling
+// process debugging (ps, strace, etc.) from within the ephemeral container.
+func (s *Session) InjectAgent(ctx context.Context, target PodTarget, privileged bool, targetContainer string) error {
 	// Get the current pod
 	pod, err := s.client.clientset.CoreV1().Pods(target.Namespace).Get(ctx, target.Name, metav1.GetOptions{})
 	if err != nil {
@@ -350,6 +353,26 @@ func (s *Session) InjectAgent(ctx context.Context, target PodTarget, privileged 
 					return fmt.Errorf("agent %s already running in pod", ec.Name)
 				}
 			}
+		}
+	}
+
+	// Determine target container for process namespace sharing
+	if targetContainer == "" {
+		// Default to the first container in the pod
+		if len(pod.Spec.Containers) > 0 {
+			targetContainer = pod.Spec.Containers[0].Name
+		}
+	} else {
+		// Validate the specified container exists
+		found := false
+		for _, c := range pod.Spec.Containers {
+			if c.Name == targetContainer {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("container %q not found in pod %s/%s", targetContainer, target.Namespace, target.Name)
 		}
 	}
 
@@ -370,6 +393,7 @@ func (s *Session) InjectAgent(ctx context.Context, target PodTarget, privileged 
 	hubAddress := fmt.Sprintf("%s.%s.svc.cluster.local:9090", s.hubService, s.namespace)
 
 	ephemeralContainer := corev1.EphemeralContainer{
+		TargetContainerName: targetContainer,
 		EphemeralContainerCommon: corev1.EphemeralContainerCommon{
 			Name:            agentName,
 			Image:           GetAgentImage(),

@@ -54,7 +54,16 @@
       "Bash(ls:*)",
       "Bash(npx vitest:*)",
       "Bash(wsl bash -c \"cd /mnt/c/Users/alram/Documents/PodScope/ui && npm test -- --run\")",
-      "Bash(wsl bash:*)"
+      "Bash(wsl bash:*)",
+      "Bash(findstr:*)",
+      "Bash(wsl -e bash -c \"cd /mnt/c/Users/alram/Documents/PodScope && make dev-quick 2>&1 | head -100\":*)",
+      "Bash(wsl -e bash -c \"cd /mnt/c/Users/alram/Documents/PodScope && make dev-quick 2>&1 | tail -60\")",
+      "Bash(wsl -e bash -c \"tail -30 /mnt/c/Users/alram/AppData/Local/Temp/claude/C--Users-alram-Documents-PodScope/tasks/ba34eb1.output 2>/dev/null || echo 'Output file not accessible via WSL path'\":*)",
+      "Bash(wsl -e bash -c \"kubectl get pods -A | grep -E ''podinfo|podscope''\")",
+      "Bash(wsl -e bash -c \"kubectl exec -it podinfo-5944c5578f-qc48z -- curl -s http://podinfo.default.svc.cluster.local:9898/ | head -20\":*)",
+      "Bash(wsl -e bash -c \"for i in 1 2 3; do kubectl exec podinfo-5944c5578f-qc48z -- curl -s http://podinfo.default.svc.cluster.local:9898/healthz; echo; done\")",
+      "Bash(wsl -e bash -c:*)",
+      "Bash(timeout 20 bash:*)"
     ]
   }
 }
