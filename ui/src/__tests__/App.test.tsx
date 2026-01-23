@@ -135,7 +135,6 @@ describe('App component initial render', () => {
     render(<App />)
     // Check filter toggles are present - using text match that includes checkmark prefix
     expect(screen.getByText(/HTTP\/HTTPS Only/)).toBeInTheDocument()
-    expect(screen.getByText(/Show DNS/)).toBeInTheDocument()
     expect(screen.getByText(/Show All Ports/)).toBeInTheDocument()
     // Wait for any pending state updates
     await act(async () => {
@@ -616,21 +615,21 @@ describe('App flow filtering', () => {
     // Send flows with different protocols and ports
     const httpFlow = createMockHTTPFlow({ id: 'http-all', srcPod: 'http-all-pod', dstPort: 80 })
     const tcpFlow = createMockFlow({ id: 'tcp-all', srcPod: 'tcp-all-pod', protocol: 'TCP', dstPort: 3306 })
-    const dnsFlow = createMockFlow({ id: 'dns-all', srcPod: 'dns-all-pod', protocol: 'TCP', dstPort: 53 })
+    const otherFlow = createMockFlow({ id: 'other-all', srcPod: 'other-all-pod', protocol: 'TCP', dstPort: 53 })
 
     await act(async () => {
       ws.simulateMessage({
         type: 'catchup',
-        flows: [httpFlow, tcpFlow, dnsFlow],
+        flows: [httpFlow, tcpFlow, otherFlow],
       })
     })
 
-    // Initially with HTTP Only, TCP on 3306 and DNS should be hidden
+    // Initially with HTTP Only, non-HTTP flows should be hidden
     await waitFor(() => {
       expect(screen.getByText('http-all-pod')).toBeInTheDocument()
     })
     expect(screen.queryByText('tcp-all-pod')).not.toBeInTheDocument()
-    expect(screen.queryByText('dns-all-pod')).not.toBeInTheDocument()
+    expect(screen.queryByText('other-all-pod')).not.toBeInTheDocument()
 
     // Click "Show All Ports" button
     const showAllButton = screen.getByText(/Show All Ports/)
@@ -640,7 +639,7 @@ describe('App flow filtering', () => {
     await waitFor(() => {
       expect(screen.getByText('http-all-pod')).toBeInTheDocument()
       expect(screen.getByText('tcp-all-pod')).toBeInTheDocument()
-      expect(screen.getByText('dns-all-pod')).toBeInTheDocument()
+      expect(screen.getByText('other-all-pod')).toBeInTheDocument()
     })
   })
 
@@ -947,92 +946,7 @@ describe('App flow filtering', () => {
     })
   })
 
-  it('DNS flows are hidden by default even on port 53', async () => {
-    render(<App />)
-
-    const ws = instances[0]
-
-    await act(async () => {
-      ws.simulateOpen()
-    })
-
-    // Create HTTP flow and DNS flow
-    const httpFlow = createMockHTTPFlow({ id: 'dns-test-http', srcPod: 'dns-test-http-pod' })
-    const dnsFlow = createMockFlow({
-      id: 'dns-test-dns',
-      srcPod: 'dns-test-dns-pod',
-      protocol: 'TCP',
-      dstPort: 53
-    })
-
-    await act(async () => {
-      ws.simulateMessage({
-        type: 'catchup',
-        flows: [httpFlow, dnsFlow],
-      })
-    })
-
-    // HTTP flow should be visible
-    await waitFor(() => {
-      expect(screen.getByText('dns-test-http-pod')).toBeInTheDocument()
-    })
-
-    // DNS flow should be hidden (showDNS is false by default)
-    expect(screen.queryByText('dns-test-dns-pod')).not.toBeInTheDocument()
-  })
-
-  it('Show DNS button reveals DNS flows when HTTP Only is active', async () => {
-    const user = userEvent.setup()
-    render(<App />)
-
-    const ws = instances[0]
-
-    await act(async () => {
-      ws.simulateOpen()
-    })
-
-    // Create HTTP flow on port 80 and DNS flow on port 53
-    // Note: DNS port 53 is not in HTTP_PORTS, so with HTTP Only filter, DNS flows would be hidden
-    // but DNS filtering is a separate check
-    const httpFlow = createMockHTTPFlow({
-      id: 'dns-test-http',
-      srcPod: 'dns-test-http-pod',
-    })
-    const dnsFlowOnHTTPPort = createMockFlow({
-      id: 'dns-show',
-      srcPod: 'dns-show-pod',
-      protocol: 'TCP',
-      srcPort: 53, // DNS source port (response from DNS server)
-      dstPort: 8080, // HTTP port - this flow would pass HTTP filter
-    })
-
-    await act(async () => {
-      ws.simulateMessage({
-        type: 'catchup',
-        flows: [httpFlow, dnsFlowOnHTTPPort],
-      })
-    })
-
-    // HTTP flow should be visible
-    await waitFor(() => {
-      expect(screen.getByText('dns-test-http-pod')).toBeInTheDocument()
-    })
-
-    // DNS flow has srcPort 53 but dstPort is HTTP port 8080
-    // With HTTP Only filter, this passes the port check but is filtered by DNS check
-    expect(screen.queryByText('dns-show-pod')).not.toBeInTheDocument()
-
-    // Click Show DNS button
-    const showDNSButton = screen.getByText(/Show DNS/)
-    await user.click(showDNSButton)
-
-    // Now DNS flow should be visible
-    await waitFor(() => {
-      expect(screen.getByText('dns-show-pod')).toBeInTheDocument()
-    })
-  })
-
-  it('Show All Ports includes DNS flows (DNS filtering skipped)', async () => {
+  it('Show All Ports includes non-HTTP flows like DNS', async () => {
     const user = userEvent.setup()
     render(<App />)
 
@@ -1056,14 +970,14 @@ describe('App flow filtering', () => {
       })
     })
 
-    // With HTTP Only (default), DNS on port 53 is filtered out
+    // With HTTP Only (default), non-HTTP flows on port 53 are filtered out
     expect(screen.queryByText('all-ports-dns-pod')).not.toBeInTheDocument()
 
     // Click "Show All Ports" button
     const showAllButton = screen.getByText(/Show All Ports/)
     await user.click(showAllButton)
 
-    // With Show All Ports, DNS filtering is skipped - DNS flows are shown
+    // With Show All Ports, all flows are shown including non-HTTP traffic
     await waitFor(() => {
       expect(screen.getByText('all-ports-dns-pod')).toBeInTheDocument()
     })

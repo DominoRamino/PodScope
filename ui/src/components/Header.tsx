@@ -1,4 +1,4 @@
-import { Search, Download, Pause, Play, Filter, ChevronDown, Sparkles, HardDrive, Activity, Waves } from 'lucide-react'
+import { Search, Download, Pause, Play, Filter, ChevronDown, Sparkles, HardDrive, Activity, Waves, Trash2 } from 'lucide-react'
 import { useState, useRef, useEffect } from 'react'
 import { formatBytes } from '../utils'
 import { bpfPresets, type BPFPreset } from '../lib/bpfPresets'
@@ -6,7 +6,6 @@ import { bpfPresets, type BPFPreset } from '../lib/bpfPresets'
 interface FilterOptions {
   searchText: string
   showOnlyHTTP: boolean
-  showDNS: boolean
   showAllPorts: boolean
 }
 
@@ -20,6 +19,7 @@ interface HeaderProps {
   filterOptions: FilterOptions
   onFilterOptionsChange: (options: FilterOptions) => void
   onDownloadPCAP: () => void
+  onClearPCAP: () => void
   isPaused: boolean
   onTogglePause: () => void
 }
@@ -34,6 +34,7 @@ export function Header({
   filterOptions,
   onFilterOptionsChange,
   onDownloadPCAP,
+  onClearPCAP,
   isPaused,
   onTogglePause,
 }: HeaderProps) {
@@ -41,18 +42,18 @@ export function Header({
   const [currentBPFFilter, setCurrentBPFFilter] = useState('')
   const [applyingFilter, setApplyingFilter] = useState(false)
   const [showPresets, setShowPresets] = useState(false)
-  const [showAIInput, setShowAIInput] = useState(false)
-  const [aiPrompt, setAiPrompt] = useState('')
   const [generatingFilter, setGeneratingFilter] = useState(false)
-  const [generatedFilter, setGeneratedFilter] = useState('')
   const [showFilters, setShowFilters] = useState(false)
   const presetsRef = useRef<HTMLDivElement>(null)
 
-  const aiEnabled = Boolean(
+  const anthropicEnabled = Boolean(import.meta.env.VITE_ANTHROPIC_API_KEY)
+  const azureEnabled = Boolean(
     import.meta.env.VITE_AZURE_OPENAI_ENDPOINT &&
     import.meta.env.VITE_AZURE_OPENAI_API_KEY &&
     import.meta.env.VITE_AZURE_OPENAI_DEPLOYMENT
   )
+  const aiEnabled = anthropicEnabled || azureEnabled
+  const aiProvider = anthropicEnabled ? 'anthropic' : 'azure'
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -70,57 +71,72 @@ export function Header({
   }
 
   const handleGenerateWithAI = async () => {
-    if (!aiPrompt.trim()) return
+    if (!bpfFilter.trim()) return
     setGeneratingFilter(true)
-    setGeneratedFilter('')
 
-    try {
-      const endpoint = import.meta.env.VITE_AZURE_OPENAI_ENDPOINT
-      const apiKey = import.meta.env.VITE_AZURE_OPENAI_API_KEY
-      const deployment = import.meta.env.VITE_AZURE_OPENAI_DEPLOYMENT
-
-      const systemPrompt = `You are a BPF (Berkeley Packet Filter) expert. Convert the user's natural language description into a valid BPF filter expression.
+    const systemPrompt = `You are a BPF (Berkeley Packet Filter) expert. Convert the user's natural language description into a valid BPF filter expression.
 Rules:
 - Output ONLY the BPF filter string, nothing else
-- Use standard tcpdump/libpcap BPF syntax
-User request:`
+- Use standard tcpdump/libpcap BPF syntax`
 
-      const response = await fetch(
-        `${endpoint}/openai/deployments/${deployment}/chat/completions?api-version=2024-02-15-preview`,
-        {
+    try {
+      let generatedBPF = ''
+
+      if (aiProvider === 'anthropic') {
+        const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY
+
+        const response = await fetch('/api/ai/anthropic', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'api-key': apiKey,
           },
           body: JSON.stringify({
-            messages: [
-              { role: 'system', content: systemPrompt },
-              { role: 'user', content: aiPrompt }
-            ],
-            max_tokens: 100,
-            temperature: 0,
+            apiKey,
+            system: systemPrompt,
+            message: bpfFilter,
           }),
-        }
-      )
+        })
 
-      if (!response.ok) throw new Error(`API error: ${response.status}`)
-      const data = await response.json()
-      const generatedBPF = data.choices[0]?.message?.content?.trim() || ''
-      setGeneratedFilter(generatedBPF)
+        if (!response.ok) throw new Error(`API error: ${response.status}`)
+        const data = await response.json()
+        generatedBPF = data.content?.trim() || ''
+      } else {
+        const endpoint = import.meta.env.VITE_AZURE_OPENAI_ENDPOINT
+        const apiKey = import.meta.env.VITE_AZURE_OPENAI_API_KEY
+        const deployment = import.meta.env.VITE_AZURE_OPENAI_DEPLOYMENT
+
+        const response = await fetch(
+          `${endpoint}/openai/deployments/${deployment}/chat/completions?api-version=2024-02-15-preview`,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'api-key': apiKey,
+            },
+            body: JSON.stringify({
+              messages: [
+                { role: 'system', content: systemPrompt },
+                { role: 'user', content: bpfFilter }
+              ],
+              max_tokens: 100,
+              temperature: 0,
+            }),
+          }
+        )
+
+        if (!response.ok) throw new Error(`API error: ${response.status}`)
+        const data = await response.json()
+        generatedBPF = data.choices[0]?.message?.content?.trim() || ''
+      }
+
+      // Replace the input text with the generated BPF filter
+      setBpfFilter(generatedBPF)
     } catch (err) {
       console.error('Error generating BPF filter with AI:', err)
       alert('Failed to generate BPF filter.')
     } finally {
       setGeneratingFilter(false)
     }
-  }
-
-  const handleUseGeneratedFilter = () => {
-    setBpfFilter(generatedFilter)
-    setGeneratedFilter('')
-    setAiPrompt('')
-    setShowAIInput(false)
   }
 
   const handleApplyBPFFilter = async () => {
@@ -165,7 +181,7 @@ User request:`
   }
 
   return (
-    <header className="relative z-20 flex-shrink-0">
+    <header className="relative z-50 flex-shrink-0">
       {/* Main header bar */}
       <div className="px-6 py-4 flex items-center justify-between gap-6 border-b border-glow-400/10 bg-void-900/80 backdrop-blur-xl">
         {/* Logo */}
@@ -241,6 +257,15 @@ User request:`
             <Filter className="w-4 h-4" />
           </button>
 
+          {/* Clear PCAP */}
+          <button
+            onClick={onClearPCAP}
+            className="btn-ghost text-status-warning hover:text-status-error hover:bg-status-error/10"
+            title="Clear PCAP data"
+          >
+            <Trash2 className="w-4 h-4" />
+          </button>
+
           {/* Download */}
           <button onClick={onDownloadPCAP} className="btn-primary">
             <Download className="w-4 h-4" />
@@ -262,12 +287,6 @@ User request:`
                   onClick={() => onFilterOptionsChange({ ...filterOptions, showOnlyHTTP: !filterOptions.showOnlyHTTP, showAllPorts: false })}
                 >
                   HTTP/S
-                </FilterChip>
-                <FilterChip
-                  active={filterOptions.showDNS}
-                  onClick={() => onFilterOptionsChange({ ...filterOptions, showDNS: !filterOptions.showDNS })}
-                >
-                  DNS
                 </FilterChip>
                 <FilterChip
                   active={filterOptions.showAllPorts}
@@ -293,7 +312,7 @@ User request:`
                   <ChevronDown className="w-3 h-3" />
                 </button>
                 {showPresets && (
-                  <div className="absolute top-full left-0 mt-2 w-72 glass-card p-1 z-50 animate-fade-in">
+                  <div className="absolute top-full left-0 mt-2 w-72 bg-void-900/95 backdrop-blur-xl border border-void-600 rounded-xl p-1 z-[200] animate-fade-in shadow-xl">
                     {bpfPresets.map((preset, index) => (
                       <button
                         key={index}
@@ -308,24 +327,26 @@ User request:`
                 )}
               </div>
 
-              {aiEnabled && (
-                <button
-                  onClick={() => setShowAIInput(!showAIInput)}
-                  className={`btn-ghost text-xs py-1.5 ${showAIInput ? 'text-purple-400 bg-purple-400/10' : ''}`}
-                >
-                  <Sparkles className="w-3 h-3" />
-                  AI
-                </button>
-              )}
-
-              <input
-                type="text"
-                placeholder="tcp port 80 or udp port 53"
-                value={bpfFilter}
-                onChange={(e) => setBpfFilter(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleApplyBPFFilter()}
-                className="flex-1 max-w-sm bg-void-800/60 border border-void-600 rounded-lg px-3 py-1.5 text-xs text-white font-mono placeholder-gray-600 focus:outline-none focus:border-glow-400/50 transition-all"
-              />
+              <div className="relative flex-1 max-w-sm">
+                <input
+                  type="text"
+                  placeholder={aiEnabled ? "BPF filter or natural language..." : "tcp port 80 or udp port 53"}
+                  value={bpfFilter}
+                  onChange={(e) => setBpfFilter(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleApplyBPFFilter()}
+                  className={`w-full bg-void-800/60 border border-void-600 rounded-lg px-3 py-1.5 text-xs text-white font-mono placeholder-gray-600 focus:outline-none focus:border-glow-400/50 transition-all ${aiEnabled ? 'pr-9' : ''}`}
+                />
+                {aiEnabled && (
+                  <button
+                    onClick={handleGenerateWithAI}
+                    disabled={generatingFilter || !bpfFilter.trim()}
+                    className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1 rounded text-purple-400 hover:text-purple-300 hover:bg-purple-400/10 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+                    title="Generate BPF filter with AI"
+                  >
+                    <Sparkles className={`w-3.5 h-3.5 ${generatingFilter ? 'animate-pulse' : ''}`} />
+                  </button>
+                )}
+              </div>
 
               <button
                 onClick={handleApplyBPFFilter}
@@ -351,40 +372,6 @@ User request:`
             </div>
           </div>
 
-          {/* AI Input row */}
-          {showAIInput && aiEnabled && (
-            <div className="mt-3 flex items-center gap-3 p-3 rounded-xl bg-purple-500/5 border border-purple-500/20 animate-fade-in">
-              <Sparkles className="w-4 h-4 text-purple-400 flex-shrink-0" />
-              <input
-                type="text"
-                placeholder="Describe your filter in plain English..."
-                value={aiPrompt}
-                onChange={(e) => setAiPrompt(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleGenerateWithAI()}
-                className="flex-1 bg-void-800/60 border border-void-600 rounded-lg px-3 py-2 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-purple-500/50 transition-all"
-              />
-              <button
-                onClick={handleGenerateWithAI}
-                disabled={generatingFilter || !aiPrompt.trim()}
-                className="px-3 py-2 rounded-lg text-xs font-medium bg-purple-500/20 text-purple-400 border border-purple-500/30 hover:bg-purple-500/30 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
-              >
-                {generatingFilter ? 'Generating...' : 'Generate'}
-              </button>
-              {generatedFilter && (
-                <>
-                  <code className="text-xs text-glow-400 bg-void-800 px-2 py-1 rounded font-mono max-w-[200px] truncate">
-                    {generatedFilter}
-                  </code>
-                  <button
-                    onClick={handleUseGeneratedFilter}
-                    className="px-3 py-2 rounded-lg text-xs font-medium bg-glow-500/20 text-glow-400 border border-glow-500/30 hover:bg-glow-500/30 transition-all"
-                  >
-                    Use
-                  </button>
-                </>
-              )}
-            </div>
-          )}
         </div>
       )}
     </header>

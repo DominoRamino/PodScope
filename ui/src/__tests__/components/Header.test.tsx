@@ -14,11 +14,11 @@ const createDefaultProps = () => ({
   filterOptions: {
     searchText: '',
     showOnlyHTTP: true,
-    showDNS: false,
     showAllPorts: false,
   },
   onFilterOptionsChange: vi.fn(),
   onDownloadPCAP: vi.fn(),
+  onClearPCAP: vi.fn(),
   isPaused: false,
   onTogglePause: vi.fn(),
 })
@@ -303,14 +303,6 @@ describe('Header component', () => {
       render(<Header {...props} />)
 
       expect(screen.getByText(/HTTP\/HTTPS Only/)).toBeInTheDocument()
-    })
-
-    it('renders Show DNS button', () => {
-      const props = createDefaultProps()
-
-      render(<Header {...props} />)
-
-      expect(screen.getByText(/Show DNS/)).toBeInTheDocument()
     })
 
     it('renders Show All Ports button', () => {

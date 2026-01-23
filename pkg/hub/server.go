@@ -138,6 +138,7 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("/api/pause", s.handlePause)
 	mux.HandleFunc("/api/bpf-filter", s.handleBPFFilter)
 	mux.HandleFunc("/api/terminal/ws", s.handleTerminalWebSocket)
+	mux.HandleFunc("/api/ai/anthropic", s.handleAnthropicProxy)
 
 	// Serve static UI files
 	mux.Handle("/", http.FileServer(http.Dir("/app/ui")))
@@ -782,4 +783,101 @@ func (s *Server) handleTerminalWebSocket(w http.ResponseWriter, r *http.Request)
 	}
 
 	log.Printf("Terminal session ended: %s/%s", namespace, podName)
+}
+
+// handleAnthropicProxy proxies requests to the Anthropic API to avoid CORS issues
+func (s *Server) handleAnthropicProxy(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		APIKey  string `json:"apiKey"`
+		System  string `json:"system"`
+		Message string `json:"message"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.APIKey == "" || req.Message == "" {
+		http.Error(w, "Missing apiKey or message", http.StatusBadRequest)
+		return
+	}
+
+	// Build Anthropic API request
+	anthropicReq := map[string]interface{}{
+		"model":      "claude-sonnet-4-20250514",
+		"max_tokens": 100,
+		"system":     req.System,
+		"messages": []map[string]string{
+			{"role": "user", "content": req.Message},
+		},
+	}
+
+	body, err := json.Marshal(anthropicReq)
+	if err != nil {
+		http.Error(w, "Failed to marshal request", http.StatusInternalServerError)
+		return
+	}
+
+	// Make request to Anthropic API
+	httpReq, err := http.NewRequest("POST", "https://api.anthropic.com/v1/messages", strings.NewReader(string(body)))
+	if err != nil {
+		http.Error(w, "Failed to create request", http.StatusInternalServerError)
+		return
+	}
+
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("x-api-key", req.APIKey)
+	httpReq.Header.Set("anthropic-version", "2023-06-01")
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		log.Printf("Anthropic API error: %v", err)
+		http.Error(w, fmt.Sprintf("API request failed: %v", err), http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		http.Error(w, "Failed to read response", http.StatusInternalServerError)
+		return
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("Anthropic API returned %d: %s", resp.StatusCode, string(respBody))
+		http.Error(w, fmt.Sprintf("Anthropic API error: %s", string(respBody)), resp.StatusCode)
+		return
+	}
+
+	// Parse the response to extract content
+	var anthropicResp struct {
+		Content []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+
+	if err := json.Unmarshal(respBody, &anthropicResp); err != nil {
+		http.Error(w, "Failed to parse API response", http.StatusInternalServerError)
+		return
+	}
+
+	// Extract text content
+	content := ""
+	for _, c := range anthropicResp.Content {
+		if c.Type == "text" {
+			content = c.Text
+			break
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"content": content})
 }

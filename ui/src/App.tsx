@@ -18,7 +18,6 @@ interface TerminalTarget {
 interface FilterOptions {
   searchText: string
   showOnlyHTTP: boolean
-  showDNS: boolean
   showAllPorts: boolean
 }
 
@@ -30,7 +29,6 @@ function App() {
   const [filterOptions, setFilterOptions] = useState<FilterOptions>({
     searchText: '',
     showOnlyHTTP: true,
-    showDNS: false,
     showAllPorts: false,
   })
   const [stats, setStats] = useState({ flows: 0, wsClients: 0, pcapSize: 0, paused: false })
@@ -156,8 +154,6 @@ function App() {
     return () => clearInterval(interval)
   }, [])
 
-  const DNS_PORT = 53
-
   const filteredFlows = useMemo(() => {
     return flows.filter(flow => {
       if (filterOptions.showAllPorts) {
@@ -168,11 +164,6 @@ function App() {
                                flow.protocol === 'TLS'
         const hasHTTPData = flow.http != null
         if (!isHTTPProtocol && !hasHTTPData) return false
-      }
-
-      if (!filterOptions.showAllPorts && !filterOptions.showDNS) {
-        const isDNS = flow.srcPort === DNS_PORT || flow.dstPort === DNS_PORT
-        if (isDNS) return false
       }
 
       if (!filter && !filterOptions.searchText) return true
@@ -229,7 +220,6 @@ function App() {
       const params = new URLSearchParams()
 
       if (filterOptions.showOnlyHTTP) params.set('onlyHTTP', 'true')
-      if (filterOptions.showDNS) params.set('includeDNS', 'true')
       if (filterOptions.showAllPorts) params.set('allPorts', 'true')
       if (filter) params.set('search', filter)
 
@@ -255,6 +245,17 @@ function App() {
     }
   }, [filterOptions, filter])
 
+  const handleClearPCAP = useCallback(async () => {
+    try {
+      const res = await fetch('/api/pcap/reset', { method: 'POST' })
+      if (res.ok) {
+        setStats(prev => ({ ...prev, pcapSize: 0 }))
+      }
+    } catch (err) {
+      console.error('Failed to clear PCAP:', err)
+    }
+  }, [])
+
   return (
     <div className="h-screen flex flex-col bg-void-950 text-white overflow-hidden relative">
       {/* Subtle noise overlay */}
@@ -278,6 +279,7 @@ function App() {
           filterOptions={filterOptions}
           onFilterOptionsChange={setFilterOptions}
           onDownloadPCAP={() => handleDownloadPCAP()}
+          onClearPCAP={handleClearPCAP}
           isPaused={stats.paused}
           onTogglePause={handleTogglePause}
         />

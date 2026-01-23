@@ -6,7 +6,7 @@ echo "=== PodScope Cluster Setup ==="
 # 1. Check/start minikube
 if ! minikube status 2>/dev/null | grep -q "Running"; then
     echo "Starting minikube..."
-    minikube start --driver=docker --cpus=4 --memory=8192
+    minikube start --driver=docker --cpus=2 --memory=2048
 else
     echo "✓ Minikube already running"
 fi
