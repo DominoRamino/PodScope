@@ -5,6 +5,22 @@ A lightweight, ephemeral network traffic capture and analysis tool for Kubernete
 
 https://github.com/user-attachments/assets/d88ba17b-ae1d-4d20-9349-0989ac500ce8
 
+## How It Works
+
+1. **Session Creation**: The CLI creates a dedicated namespace (`podscope-<id>`) and deploys the Hub.
+
+2. **Agent Injection**: For each target pod, an ephemeral container running the capture agent is injected using `kubectl debug` equivalent API.
+
+3. **Packet Capture**: The agent uses `gopacket` with `AF_PACKET` to capture all traffic on the pod's network interface.
+
+4. **Protocol Analysis**: TCP streams are reassembled, and HTTP/TLS protocols are parsed to extract metadata.
+
+5. **Data Streaming**: Flow events and raw PCAP data are streamed to the Hub via gRPC.
+
+6. **Visualization**: The Hub serves a React UI that connects via WebSocket for real-time updates.
+
+7. **Cleanup**: On exit, the CLI deletes the session namespace, removing all resources.
+
 ## Features
 
 - **Zero-intrusion packet capture** via Kubernetes ephemeral containers
@@ -13,42 +29,6 @@ https://github.com/user-attachments/assets/d88ba17b-ae1d-4d20-9349-0989ac500ce8
 - **Real-time traffic visualization** - Live updating web UI
 - **PCAP export** - Download captures for Wireshark analysis
 - **Session-based** - All resources cleaned up on exit
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                         CLI (podscope)                       │
-│  - Session Controller                                        │
-│  - Creates namespace, deploys Hub                            │
-│  - Injects Agents via kubectl debug                          │
-│  - Port-forwards to Hub UI                                   │
-└─────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│                    Session Namespace                         │
-│  ┌─────────────────────────────────────────────────────┐    │
-│  │                    Hub (Deployment)                  │    │
-│  │  - Receives flows from Agents (gRPC)                │    │
-│  │  - Stores PCAP data                                 │    │
-│  │  - Serves WebSocket API for UI                      │    │
-│  │  - Serves React UI                                  │    │
-│  └─────────────────────────────────────────────────────┘    │
-└─────────────────────────────────────────────────────────────┘
-                              ▲
-                              │ gRPC
-┌─────────────────────────────┼───────────────────────────────┐
-│            Target Pod       │                               │
-│  ┌────────────────────┐    │    ┌─────────────────────┐    │
-│  │   App Container    │◄───┼───►│  Capture Agent      │    │
-│  │                    │ network │  (Ephemeral)        │    │
-│  │                    │   ns    │  - gopacket capture │    │
-│  └────────────────────┘         │  - TCP reassembly   │    │
-│                                 │  - HTTP/TLS parsing │    │
-│                                 └─────────────────────┘    │
-└─────────────────────────────────────────────────────────────┘
-```
 
 ## Quick Start
 
@@ -210,28 +190,47 @@ npm run test:coverage
 └── Makefile
 ```
 
-## How It Works
+## Architecture
 
-1. **Session Creation**: The CLI creates a dedicated namespace (`podscope-<id>`) and deploys the Hub.
-
-2. **Agent Injection**: For each target pod, an ephemeral container running the capture agent is injected using `kubectl debug` equivalent API.
-
-3. **Packet Capture**: The agent uses `gopacket` with `AF_PACKET` to capture all traffic on the pod's network interface.
-
-4. **Protocol Analysis**: TCP streams are reassembled, and HTTP/TLS protocols are parsed to extract metadata.
-
-5. **Data Streaming**: Flow events and raw PCAP data are streamed to the Hub via gRPC.
-
-6. **Visualization**: The Hub serves a React UI that connects via WebSocket for real-time updates.
-
-7. **Cleanup**: On exit, the CLI deletes the session namespace, removing all resources.
+```
+┌─────────────────────────────────────────────────────────────┐
+│                         CLI (podscope)                       │
+│  - Session Controller                                        │
+│  - Creates namespace, deploys Hub                            │
+│  - Injects Agents via kubectl debug                          │
+│  - Port-forwards to Hub UI                                   │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    Session Namespace                         │
+│  ┌─────────────────────────────────────────────────────┐    │
+│  │                    Hub (Deployment)                  │    │
+│  │  - Receives flows from Agents (gRPC)                │    │
+│  │  - Stores PCAP data                                 │    │
+│  │  - Serves WebSocket API for UI                      │    │
+│  │  - Serves React UI                                  │    │
+│  └─────────────────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────────────┘
+                              ▲
+                              │ gRPC
+┌─────────────────────────────┼───────────────────────────────┐
+│            Target Pod       │                               │
+│  ┌────────────────────┐    │    ┌─────────────────────┐    │
+│  │   App Container    │◄───┼───►│  Capture Agent      │    │
+│  │                    │ network │  (Ephemeral)        │    │
+│  │                    │   ns    │  - gopacket capture │    │
+│  └────────────────────┘         │  - TCP reassembly   │    │
+│                                 │  - HTTP/TLS parsing │    │
+│                                 └─────────────────────┘    │
+└─────────────────────────────────────────────────────────────┘
+```
 
 ## Security Considerations
 
 - **Capabilities**: The agent requires `NET_RAW` capability for packet capture
 - **Network Isolation**: Hub is ClusterIP only, accessed via port-forward
 - **Data Lifecycle**: All data stored in emptyDir, deleted with namespace
-- **No Decryption**: HTTPS traffic shows metadata only (SNI, timing)
 
 ## Limitations (MVP)
 
