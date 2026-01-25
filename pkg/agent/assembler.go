@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"strings"
@@ -292,6 +293,18 @@ func (a *TCPAssembler) parseHTTP(flow *TCPFlow) {
 				flow.HTTP.RequestHeaders[k] = strings.Join(v, ", ")
 			}
 
+			// Extract request body (limited to MaxBodySize)
+			if req.Body != nil {
+				bodyData, err := io.ReadAll(io.LimitReader(req.Body, MaxBodySize))
+				req.Body.Close()
+				if err != nil {
+					log.Printf("WARN: Failed to read request body: %v", err)
+				}
+				if len(bodyData) > 0 {
+					flow.HTTP.RequestBody = string(bodyData)
+				}
+			}
+
 			flow.Protocol = protocol.ProtocolHTTP
 		}
 	}
@@ -308,6 +321,18 @@ func (a *TCPAssembler) parseHTTP(flow *TCPFlow) {
 
 			for k, v := range resp.Header {
 				flow.HTTP.ResponseHeaders[k] = strings.Join(v, ", ")
+			}
+
+			// Extract response body (limited to MaxBodySize)
+			if resp.Body != nil {
+				bodyData, err := io.ReadAll(io.LimitReader(resp.Body, MaxBodySize))
+				resp.Body.Close()
+				if err != nil {
+					log.Printf("WARN: Failed to read response body: %v", err)
+				}
+				if len(bodyData) > 0 {
+					flow.HTTP.ResponseBody = string(bodyData)
+				}
 			}
 		}
 	}
