@@ -71,6 +71,21 @@ podscope tap -A -l app=api
 podscope tap -n default -l app=frontend --force-privileged
 ```
 
+### AI Features
+
+PodScope includes AI-powered BPF filter generation. To enable this feature, provide your Anthropic API key:
+
+```bash
+# Via CLI flag
+podscope tap -n default -l app=frontend --anthropic-api-key sk-ant-...
+
+# Or via environment variable
+export ANTHROPIC_API_KEY=sk-ant-...
+podscope tap -n default -l app=frontend
+```
+
+The CLI flag takes precedence over the environment variable if both are set.
+
 Once running, open `http://localhost:8899` in your browser to view the traffic.
 
 Press `Ctrl+C` to stop and clean up all resources.

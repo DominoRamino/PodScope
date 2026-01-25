@@ -61,6 +61,9 @@ type Server struct {
 	// Kubernetes client for terminal exec (initialized lazily)
 	k8sClient     kubernetes.Interface
 	k8sRestConfig *rest.Config
+
+	// API keys from environment
+	anthropicAPIKey string
 }
 
 // NewServer creates a new Hub server
@@ -79,16 +82,20 @@ func NewServer(httpPort, grpcPort int) *Server {
 	batchIntervalMs := getEnvIntServer("WS_BATCH_INTERVAL_MS", 150)
 	catchupLimit := getEnvIntServer("WS_CATCHUP_LIMIT", 200)
 
+	// Read API key from environment
+	anthropicAPIKey := os.Getenv("ANTHROPIC_API_KEY")
+
 	s := &Server{
-		httpPort:   httpPort,
-		grpcPort:   grpcPort,
-		sessionID:  sessionID,
-		pcapDir:    pcapDir,
-		flowBuffer: NewFlowRingBuffer(0), // Uses MAX_FLOWS env or default 10000
-		wsClients:     make(map[*websocket.Conn]bool),
-		flowBatch:     make([]*protocol.Flow, 0, 64),
-		batchInterval: time.Duration(batchIntervalMs) * time.Millisecond,
-		catchupLimit:  catchupLimit,
+		httpPort:        httpPort,
+		grpcPort:        grpcPort,
+		sessionID:       sessionID,
+		pcapDir:         pcapDir,
+		flowBuffer:      NewFlowRingBuffer(0), // Uses MAX_FLOWS env or default 10000
+		wsClients:       make(map[*websocket.Conn]bool),
+		flowBatch:       make([]*protocol.Flow, 0, 64),
+		batchInterval:   time.Duration(batchIntervalMs) * time.Millisecond,
+		catchupLimit:    catchupLimit,
+		anthropicAPIKey: anthropicAPIKey,
 		wsUpgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool {
 				return true // Allow all origins for local development
@@ -803,7 +810,13 @@ func (s *Server) handleAnthropicProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.APIKey == "" || req.Message == "" {
+	// Use server's API key as default if not provided in request
+	apiKey := req.APIKey
+	if apiKey == "" {
+		apiKey = s.anthropicAPIKey
+	}
+
+	if apiKey == "" || req.Message == "" {
 		http.Error(w, "Missing apiKey or message", http.StatusBadRequest)
 		return
 	}
@@ -832,7 +845,7 @@ func (s *Server) handleAnthropicProxy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("x-api-key", req.APIKey)
+	httpReq.Header.Set("x-api-key", apiKey)
 	httpReq.Header.Set("anthropic-version", "2023-06-01")
 
 	client := &http.Client{Timeout: 30 * time.Second}

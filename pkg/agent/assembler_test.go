@@ -1164,3 +1164,271 @@ func TestParseHTTP_URLWithQueryString(t *testing.T) {
 		t.Errorf("HTTP.URL = %q, want %q", flow.HTTP.URL, "/search?q=test&page=1")
 	}
 }
+
+// Test isAgentTraffic - verifies correct identification of agent-to-hub communication
+
+// Helper to create an assembler with agent and hub info for testing
+func newTestAssemblerWithInfo(podIP, hubIP string) *TCPAssembler {
+	a := &TCPAssembler{
+		flows:      make(map[string]*TCPFlow),
+		agentPodIP: podIP,
+		hubIP:      hubIP,
+	}
+	return a
+}
+
+func TestIsAgentTraffic_PodToHubPort8080(t *testing.T) {
+	assembler := newTestAssemblerWithInfo("10.0.0.5", "10.0.0.100")
+
+	flow := &TCPFlow{
+		SrcIP:   "10.0.0.5",   // Pod IP
+		DstIP:   "10.0.0.100", // Hub IP
+		SrcPort: 45678,
+		DstPort: 8080, // Agent HTTP port
+	}
+
+	isAgent, trafficType := assembler.isAgentTraffic(flow)
+
+	if !isAgent {
+		t.Error("isAgentTraffic() should return true for pod->hub on port 8080")
+	}
+	if trafficType != "unknown" {
+		t.Errorf("trafficType = %q, want %q (no HTTP parsed)", trafficType, "unknown")
+	}
+}
+
+func TestIsAgentTraffic_PodToHubPort9090(t *testing.T) {
+	assembler := newTestAssemblerWithInfo("10.0.0.5", "10.0.0.100")
+
+	flow := &TCPFlow{
+		SrcIP:   "10.0.0.5",
+		DstIP:   "10.0.0.100",
+		SrcPort: 45678,
+		DstPort: 9090, // Agent gRPC port
+	}
+
+	isAgent, _ := assembler.isAgentTraffic(flow)
+
+	if !isAgent {
+		t.Error("isAgentTraffic() should return true for pod->hub on port 9090")
+	}
+}
+
+func TestIsAgentTraffic_HubToPodResponse(t *testing.T) {
+	assembler := newTestAssemblerWithInfo("10.0.0.5", "10.0.0.100")
+
+	// Response from hub back to pod
+	flow := &TCPFlow{
+		SrcIP:   "10.0.0.100", // Hub IP
+		DstIP:   "10.0.0.5",   // Pod IP
+		SrcPort: 8080,
+		DstPort: 45678,
+	}
+
+	isAgent, _ := assembler.isAgentTraffic(flow)
+
+	if !isAgent {
+		t.Error("isAgentTraffic() should return true for hub->pod response")
+	}
+}
+
+func TestIsAgentTraffic_NotAgentTraffic_DifferentDestination(t *testing.T) {
+	assembler := newTestAssemblerWithInfo("10.0.0.5", "10.0.0.100")
+
+	// Traffic from pod to a different service on port 8080
+	flow := &TCPFlow{
+		SrcIP:   "10.0.0.5",
+		DstIP:   "10.0.0.200", // Different IP (not hub)
+		SrcPort: 45678,
+		DstPort: 8080,
+	}
+
+	isAgent, _ := assembler.isAgentTraffic(flow)
+
+	if isAgent {
+		t.Error("isAgentTraffic() should return false for traffic to non-hub destination")
+	}
+}
+
+func TestIsAgentTraffic_NotAgentTraffic_DifferentPort(t *testing.T) {
+	assembler := newTestAssemblerWithInfo("10.0.0.5", "10.0.0.100")
+
+	// Traffic to hub but on a different port
+	flow := &TCPFlow{
+		SrcIP:   "10.0.0.5",
+		DstIP:   "10.0.0.100",
+		SrcPort: 45678,
+		DstPort: 443, // HTTPS, not agent port
+	}
+
+	isAgent, _ := assembler.isAgentTraffic(flow)
+
+	if isAgent {
+		t.Error("isAgentTraffic() should return false for non-agent ports")
+	}
+}
+
+func TestIsAgentTraffic_HealthCheckPath(t *testing.T) {
+	assembler := newTestAssemblerWithInfo("10.0.0.5", "10.0.0.100")
+
+	flow := &TCPFlow{
+		SrcIP:   "10.0.0.5",
+		DstIP:   "10.0.0.100",
+		SrcPort: 45678,
+		DstPort: 8080,
+		HTTP: &protocol.HTTPInfo{
+			Method: "GET",
+			URL:    "/api/health",
+		},
+	}
+
+	isAgent, trafficType := assembler.isAgentTraffic(flow)
+
+	if !isAgent {
+		t.Error("isAgentTraffic() should return true for health check")
+	}
+	if trafficType != "health" {
+		t.Errorf("trafficType = %q, want %q", trafficType, "health")
+	}
+}
+
+func TestIsAgentTraffic_FlowsPath(t *testing.T) {
+	assembler := newTestAssemblerWithInfo("10.0.0.5", "10.0.0.100")
+
+	flow := &TCPFlow{
+		SrcIP:   "10.0.0.5",
+		DstIP:   "10.0.0.100",
+		SrcPort: 45678,
+		DstPort: 8080,
+		HTTP: &protocol.HTTPInfo{
+			Method: "POST",
+			URL:    "/api/flows",
+		},
+	}
+
+	isAgent, trafficType := assembler.isAgentTraffic(flow)
+
+	if !isAgent {
+		t.Error("isAgentTraffic() should return true for flows endpoint")
+	}
+	if trafficType != "flow" {
+		t.Errorf("trafficType = %q, want %q", trafficType, "flow")
+	}
+}
+
+func TestIsAgentTraffic_PcapPath(t *testing.T) {
+	assembler := newTestAssemblerWithInfo("10.0.0.5", "10.0.0.100")
+
+	flow := &TCPFlow{
+		SrcIP:   "10.0.0.5",
+		DstIP:   "10.0.0.100",
+		SrcPort: 45678,
+		DstPort: 8080,
+		HTTP: &protocol.HTTPInfo{
+			Method: "POST",
+			URL:    "/api/pcap/upload",
+		},
+	}
+
+	isAgent, trafficType := assembler.isAgentTraffic(flow)
+
+	if !isAgent {
+		t.Error("isAgentTraffic() should return true for pcap upload")
+	}
+	if trafficType != "pcap" {
+		t.Errorf("trafficType = %q, want %q", trafficType, "pcap")
+	}
+}
+
+func TestIsAgentTraffic_AgentsPath(t *testing.T) {
+	assembler := newTestAssemblerWithInfo("10.0.0.5", "10.0.0.100")
+
+	flow := &TCPFlow{
+		SrcIP:   "10.0.0.5",
+		DstIP:   "10.0.0.100",
+		SrcPort: 45678,
+		DstPort: 8080,
+		HTTP: &protocol.HTTPInfo{
+			Method: "POST",
+			URL:    "/api/agents",
+		},
+	}
+
+	isAgent, trafficType := assembler.isAgentTraffic(flow)
+
+	if !isAgent {
+		t.Error("isAgentTraffic() should return true for agent registration")
+	}
+	if trafficType != "registration" {
+		t.Errorf("trafficType = %q, want %q", trafficType, "registration")
+	}
+}
+
+func TestIsAgentTraffic_NoPodIP(t *testing.T) {
+	// No pod IP set
+	assembler := newTestAssemblerWithInfo("", "10.0.0.100")
+
+	flow := &TCPFlow{
+		SrcIP:   "10.0.0.5",
+		DstIP:   "10.0.0.100",
+		SrcPort: 45678,
+		DstPort: 8080,
+	}
+
+	isAgent, _ := assembler.isAgentTraffic(flow)
+
+	if isAgent {
+		t.Error("isAgentTraffic() should return false when pod IP is not set")
+	}
+}
+
+func TestIsAgentTraffic_NoHubIP(t *testing.T) {
+	// No hub IP set
+	assembler := newTestAssemblerWithInfo("10.0.0.5", "")
+
+	flow := &TCPFlow{
+		SrcIP:   "10.0.0.5",
+		DstIP:   "10.0.0.100",
+		SrcPort: 45678,
+		DstPort: 8080,
+	}
+
+	isAgent, _ := assembler.isAgentTraffic(flow)
+
+	if isAgent {
+		t.Error("isAgentTraffic() should return false when hub IP is not set")
+	}
+}
+
+func TestIsAgentTraffic_IPv6Addresses(t *testing.T) {
+	assembler := newTestAssemblerWithInfo("2001:db8::1", "2001:db8::100")
+
+	flow := &TCPFlow{
+		SrcIP:   "2001:db8::1",
+		DstIP:   "2001:db8::100",
+		SrcPort: 45678,
+		DstPort: 8080,
+	}
+
+	isAgent, _ := assembler.isAgentTraffic(flow)
+
+	if !isAgent {
+		t.Error("isAgentTraffic() should work with IPv6 addresses")
+	}
+}
+
+func TestSetHubIP(t *testing.T) {
+	assembler := newTestAssembler()
+
+	// Initially no hub IP
+	if assembler.hubIP != "" {
+		t.Error("hubIP should be empty initially")
+	}
+
+	// Set hub IP
+	assembler.SetHubIP("10.0.0.100")
+
+	if assembler.hubIP != "10.0.0.100" {
+		t.Errorf("hubIP = %q, want %q", assembler.hubIP, "10.0.0.100")
+	}
+}
