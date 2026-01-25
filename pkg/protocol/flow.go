@@ -63,6 +63,10 @@ type Flow struct {
 
 	// TLS info
 	TLS *TLSInfo `json:"tls,omitempty"`
+
+	// Agent traffic identification (for filtering noise from captures)
+	IsAgentTraffic   bool   `json:"isAgentTraffic,omitempty"`
+	AgentTrafficType string `json:"agentTrafficType,omitempty"` // "health", "flow", "pcap", "registration"
 }
 
 // HTTPInfo contains HTTP request/response information

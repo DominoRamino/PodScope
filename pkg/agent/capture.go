@@ -75,6 +75,13 @@ func (c *Capturer) SetBPFFilter(filter string) {
 	c.defaultBPFFilter = filter // Store as default for reset
 }
 
+// SetHubIP sets the Hub IP for agent traffic tagging in the assembler.
+func (c *Capturer) SetHubIP(hubIP string) {
+	if c.assembler != nil {
+		c.assembler.SetHubIP(hubIP)
+	}
+}
+
 // BuildCombinedFilter combines a user filter with the default hub exclusion filter.
 // This ensures hub traffic is always excluded regardless of what filter the user sets.
 func (c *Capturer) BuildCombinedFilter(userFilter string) string {

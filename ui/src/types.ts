@@ -53,4 +53,8 @@ export interface Flow {
 
   http?: HTTPInfo
   tls?: TLSInfo
+
+  // Agent traffic identification (for filtering noise from captures)
+  isAgentTraffic?: boolean
+  agentTrafficType?: 'health' | 'flow' | 'pcap' | 'registration' | 'unknown'
 }

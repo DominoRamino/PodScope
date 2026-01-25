@@ -33,6 +33,9 @@ type TCPAssembler struct {
 	agentPodName   string
 	agentNamespace string
 	agentPodIP     string
+
+	// Hub info for agent traffic tagging
+	hubIP string
 }
 
 // TCPFlow represents a TCP connection
@@ -90,6 +93,54 @@ func NewTCPAssembler(onComplete func(*protocol.Flow), agentInfo *protocol.AgentI
 	go a.cleanupLoop()
 
 	return a
+}
+
+// SetHubIP sets the Hub IP for agent traffic tagging.
+// This allows identifying flows that are agent->Hub communication.
+func (a *TCPAssembler) SetHubIP(hubIP string) {
+	a.hubIP = hubIP
+}
+
+// isAgentTraffic checks if a flow is agent-to-Hub communication.
+// Returns true and the traffic type if this is agent traffic.
+func (a *TCPAssembler) isAgentTraffic(flow *TCPFlow) (bool, string) {
+	// Need both pod IP and hub IP to identify agent traffic
+	if a.agentPodIP == "" || a.hubIP == "" {
+		return false, ""
+	}
+
+	// Check if this is traffic from pod to hub on agent ports
+	isFromPodToHub := flow.SrcIP == a.agentPodIP && flow.DstIP == a.hubIP
+	isFromHubToPod := flow.SrcIP == a.hubIP && flow.DstIP == a.agentPodIP
+
+	if !isFromPodToHub && !isFromHubToPod {
+		return false, ""
+	}
+
+	// Check if it's on agent communication ports (8080 or 9090)
+	isAgentPort := flow.DstPort == 8080 || flow.DstPort == 9090 ||
+		flow.SrcPort == 8080 || flow.SrcPort == 9090
+
+	if !isAgentPort {
+		return false, ""
+	}
+
+	// Determine traffic type from HTTP path if available
+	if flow.HTTP != nil && flow.HTTP.URL != "" {
+		switch {
+		case strings.HasPrefix(flow.HTTP.URL, "/api/health"):
+			return true, "health"
+		case strings.HasPrefix(flow.HTTP.URL, "/api/flows"):
+			return true, "flow"
+		case strings.HasPrefix(flow.HTTP.URL, "/api/pcap"):
+			return true, "pcap"
+		case strings.HasPrefix(flow.HTTP.URL, "/api/agents"):
+			return true, "registration"
+		}
+	}
+
+	// It's agent traffic but we couldn't determine the specific type
+	return true, "unknown"
 }
 
 // flowKey generates a unique key for a TCP flow
@@ -448,6 +499,13 @@ func (a *TCPAssembler) completeFlow(key string, flow *TCPFlow) {
 	}
 
 	log.Printf("DEBUG: Final flow - SrcPod=%q DstPod=%q", f.SrcPod, f.DstPod)
+
+	// Tag agent traffic for filtering
+	if isAgent, trafficType := a.isAgentTraffic(flow); isAgent {
+		f.IsAgentTraffic = true
+		f.AgentTrafficType = trafficType
+		log.Printf("DEBUG: Tagged as agent traffic - type=%s", trafficType)
+	}
 
 	// Calculate timing
 	if flow.SYNSeen && flow.SYNACKSeen {
