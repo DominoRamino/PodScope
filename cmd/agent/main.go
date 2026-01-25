@@ -119,6 +119,13 @@ func main() {
 		log.Printf("  Hub IP set for agent traffic tagging: %s", hubIP)
 	}
 
+	// Set hub hostname for DNS query filtering (filters out agent's own DNS lookups for the hub)
+	hubHost := hubAddress
+	if idx := strings.LastIndex(hubAddress, ":"); idx != -1 {
+		hubHost = hubAddress[:idx]
+	}
+	capturer.SetHubHostname(hubHost)
+
 	// Handle signals
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
@@ -186,6 +193,7 @@ func buildHubExclusionFilter(hubAddress, podIP string) (filter string, hubIP str
 	log.Printf("  Pod IP: %s", podIP)
 
 	// Precise filter: exclude all traffic BETWEEN pod and hub on agent ports (both directions)
+	// DNS queries for the hub hostname are filtered at the application level (see capture.go isHubDNSPacket)
 	// This preserves legitimate traffic from the target pod to other services on 8080/9090
 	if podIP != "" {
 		// Using "host A and host B" matches packets where either endpoint is A and the other is B

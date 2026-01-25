@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -31,6 +32,9 @@ type Capturer struct {
 	handle           *pcap.Handle
 	hubClient        *HubClient
 	agentInfo        *protocol.AgentInfo
+
+	// Hub hostname for filtering DNS queries
+	hubHostname string
 
 	// Packet buffer for PCAP
 	pcapBuffer bytes.Buffer
@@ -80,6 +84,13 @@ func (c *Capturer) SetHubIP(hubIP string) {
 	if c.assembler != nil {
 		c.assembler.SetHubIP(hubIP)
 	}
+}
+
+// SetHubHostname sets the hub hostname for filtering DNS queries.
+// DNS queries containing this hostname will be excluded from PCAP.
+func (c *Capturer) SetHubHostname(hostname string) {
+	c.hubHostname = hostname
+	log.Printf("  Hub hostname set for DNS filtering: %s", hostname)
 }
 
 // BuildCombinedFilter combines a user filter with the default hub exclusion filter.
@@ -190,19 +201,26 @@ func (c *Capturer) processPacket(packet gopacket.Packet) {
 	c.stats.BytesCaptured += uint64(len(packet.Data()))
 	c.statsMutex.Unlock()
 
-	// Write to PCAP buffer
-	c.writePCAPPacket(packet)
-
 	// Parse network layers
 	networkLayer := packet.NetworkLayer()
 	if networkLayer == nil {
+		c.writePCAPPacket(packet)
 		return
 	}
 
 	transportLayer := packet.TransportLayer()
 	if transportLayer == nil {
+		c.writePCAPPacket(packet)
 		return
 	}
+
+	// Check if this is a DNS packet for the hub hostname - if so, skip it
+	if c.isHubDNSPacket(packet, transportLayer) {
+		return // Don't write to PCAP
+	}
+
+	// Write to PCAP buffer (after DNS filtering)
+	c.writePCAPPacket(packet)
 
 	switch transportLayer.LayerType() {
 	case layers.LayerTypeTCP:
@@ -216,6 +234,47 @@ func (c *Capturer) processPacket(packet gopacket.Packet) {
 		c.statsMutex.Unlock()
 		// UDP processing can be added later
 	}
+}
+
+// isHubDNSPacket checks if a packet is a DNS query for the hub hostname.
+// Returns true if the packet should be filtered out.
+func (c *Capturer) isHubDNSPacket(packet gopacket.Packet, transportLayer gopacket.TransportLayer) bool {
+	// Only filter if we have a hub hostname configured
+	if c.hubHostname == "" {
+		return false
+	}
+
+	// Check if it's UDP on port 53 (DNS)
+	udp, ok := transportLayer.(*layers.UDP)
+	if !ok {
+		return false
+	}
+
+	if udp.DstPort != 53 && udp.SrcPort != 53 {
+		return false
+	}
+
+	// Parse DNS layer
+	dnsLayer := packet.Layer(layers.LayerTypeDNS)
+	if dnsLayer == nil {
+		return false
+	}
+
+	dns, ok := dnsLayer.(*layers.DNS)
+	if !ok {
+		return false
+	}
+
+	// Check if any question matches the hub hostname
+	for _, q := range dns.Questions {
+		queryName := string(q.Name)
+		// Check if the query contains the hub hostname (handles search domain suffixes)
+		if strings.Contains(queryName, c.hubHostname) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // processTCPPacket processes a TCP packet
