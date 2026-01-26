@@ -54,3 +54,4 @@ BUILD_NUMBER
 # PCAP files
 *.pcap
 tasks/*
+.claude/settings.local.json

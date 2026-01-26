@@ -9,6 +9,7 @@ const createDefaultProps = () => ({
   flowCount: 0,
   filteredCount: 0,
   pcapSize: 0,
+  pcapFull: false,
   filter: '',
   onFilterChange: vi.fn(),
   filterOptions: {

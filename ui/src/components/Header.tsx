@@ -1,4 +1,4 @@
-import { Search, Download, Pause, Play, Filter, ChevronDown, Sparkles, HardDrive, Activity, Waves, Trash2, X, Check } from 'lucide-react'
+import { Search, Download, Pause, Play, Filter, ChevronDown, Sparkles, HardDrive, Activity, Waves, Trash2, X, Check, AlertTriangle } from 'lucide-react'
 import { useState, useRef, useEffect } from 'react'
 import { formatBytes } from '../utils'
 import { bpfPresets, type BPFPreset } from '../lib/bpfPresets'
@@ -14,6 +14,7 @@ interface HeaderProps {
   flowCount: number
   filteredCount: number
   pcapSize: number
+  pcapFull: boolean
   filter: string
   onFilterChange: (filter: string) => void
   filterOptions: FilterOptions
@@ -29,6 +30,7 @@ export function Header({
   flowCount,
   filteredCount,
   pcapSize,
+  pcapFull,
   filter,
   onFilterChange,
   filterOptions,
@@ -248,14 +250,20 @@ Rules:
           </div>
 
           {/* Stats pills */}
-          <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-void-800/60 border border-void-700">
+          <div className={`flex items-center gap-2 px-3 py-2 rounded-lg ${pcapFull ? 'bg-status-warning/10 border border-status-warning/30' : 'bg-void-800/60 border border-void-700'}`}>
             <Activity className="w-3.5 h-3.5 text-gray-400" />
             <span className="text-xs text-gray-400 font-mono">
               {filteredCount === flowCount ? flowCount : `${filteredCount}/${flowCount}`}
             </span>
             <div className="w-px h-3 bg-void-600" />
-            <HardDrive className="w-3.5 h-3.5 text-gray-400" />
-            <span className="text-xs text-gray-400 font-mono">{formatBytes(pcapSize)}</span>
+            {pcapFull ? (
+              <AlertTriangle className="w-3.5 h-3.5 text-status-warning" />
+            ) : (
+              <HardDrive className="w-3.5 h-3.5 text-gray-400" />
+            )}
+            <span className={`text-xs font-mono ${pcapFull ? 'text-status-warning' : 'text-gray-400'}`}>
+              {pcapFull ? 'Buffer Full' : formatBytes(pcapSize)}
+            </span>
           </div>
 
           {/* Pause */}
@@ -279,8 +287,8 @@ Rules:
           {/* Clear PCAP */}
           <button
             onClick={onClearPCAP}
-            className="btn-ghost text-status-warning hover:text-status-error hover:bg-status-error/10"
-            title="Clear PCAP data"
+            className={`btn-ghost ${pcapFull ? 'text-status-warning bg-status-warning/20 animate-pulse' : 'text-status-warning hover:text-status-error hover:bg-status-error/10'}`}
+            title={pcapFull ? 'Buffer full - click to reset and continue capturing' : 'Clear PCAP data'}
           >
             <Trash2 className="w-4 h-4" />
           </button>

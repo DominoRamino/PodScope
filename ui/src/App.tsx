@@ -31,7 +31,7 @@ function App() {
     showOnlyHTTP: true,
     showAllPorts: false,
   })
-  const [stats, setStats] = useState({ flows: 0, wsClients: 0, pcapSize: 0, paused: false })
+  const [stats, setStats] = useState({ flows: 0, wsClients: 0, pcapSize: 0, pcapFull: false, paused: false })
   const [terminalTarget, setTerminalTarget] = useState<TerminalTarget | null>(null)
   const [terminalMaximized, setTerminalMaximized] = useState(false)
 
@@ -46,7 +46,7 @@ function App() {
       // Demo mode: load mock data and simulate live updates
       setConnected(true)
       setFlows(mockFlows)
-      setStats({ flows: mockFlows.length, wsClients: 1, pcapSize: 245678, paused: false })
+      setStats({ flows: mockFlows.length, wsClients: 1, pcapSize: 245678, pcapFull: false, paused: false })
 
       // Simulate new flows arriving
       const interval = setInterval(() => {
@@ -249,7 +249,7 @@ function App() {
     try {
       const res = await fetch('/api/pcap/reset', { method: 'POST' })
       if (res.ok) {
-        setStats(prev => ({ ...prev, pcapSize: 0 }))
+        setStats(prev => ({ ...prev, pcapSize: 0, pcapFull: false }))
       }
     } catch (err) {
       console.error('Failed to clear PCAP:', err)
@@ -274,6 +274,7 @@ function App() {
           flowCount={flows.length}
           filteredCount={filteredFlows.length}
           pcapSize={stats.pcapSize}
+          pcapFull={stats.pcapFull}
           filter={filter}
           onFilterChange={setFilter}
           filterOptions={filterOptions}

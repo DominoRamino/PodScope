@@ -357,58 +357,111 @@ func (a *TCPAssembler) parseHTTP(flow *TCPFlow) {
 	}
 }
 
-// parseTLS parses TLS ClientHello to extract SNI and cipher suites
+// parseTLS parses TLS ClientHello and ServerHello to extract SNI, cipher suites, and negotiated cipher
 func (a *TCPAssembler) parseTLS(flow *TCPFlow) {
-	if flow.TLS != nil {
-		return // Already parsed
-	}
-
-	data := flow.ClientData.Bytes()
-	if len(data) < 6 {
-		return
-	}
-
-	// Check for TLS record
-	if data[0] != 0x16 { // Handshake
-		return
-	}
-
-	flow.TLS = &protocol.TLSInfo{
-		Encrypted: true,
-	}
-
-	// Parse TLS version
-	switch {
-	case data[1] == 0x03 && data[2] == 0x03:
-		flow.TLS.Version = "TLS 1.2"
-	case data[1] == 0x03 && data[2] == 0x01:
-		flow.TLS.Version = "TLS 1.0"
-	case data[1] == 0x03 && data[2] == 0x02:
-		flow.TLS.Version = "TLS 1.1"
-	default:
-		flow.TLS.Version = fmt.Sprintf("TLS %d.%d", data[1], data[2])
-	}
-
-	// Extract SNI, cipher suites, and ALPN from ClientHello
-	tlsInfo := extractTLSClientHelloInfo(data)
-	if tlsInfo.SNI != "" {
-		flow.TLS.SNI = tlsInfo.SNI
-	}
-	if len(tlsInfo.CipherSuites) > 0 {
-		// Convert cipher suite IDs to human-readable names
-		cipherSuiteNames := make([]string, len(tlsInfo.CipherSuites))
-		for i, id := range tlsInfo.CipherSuites {
-			cipherSuiteNames[i] = CipherSuiteName(id)
+	// Parse ClientHello (only once)
+	if flow.TLS == nil {
+		data := flow.ClientData.Bytes()
+		if len(data) < 6 {
+			return
 		}
-		flow.TLS.CipherSuites = cipherSuiteNames
-	}
-	if len(tlsInfo.ALPNProtocols) > 0 {
-		flow.TLS.ALPN = tlsInfo.ALPNProtocols
+
+		// Check for TLS record
+		if data[0] != 0x16 { // Handshake
+			return
+		}
+
+		flow.TLS = &protocol.TLSInfo{
+			Encrypted: true,
+		}
+
+		// Parse TLS version from record header
+		switch {
+		case data[1] == 0x03 && data[2] == 0x03:
+			flow.TLS.Version = "TLS 1.2"
+		case data[1] == 0x03 && data[2] == 0x01:
+			flow.TLS.Version = "TLS 1.0"
+		case data[1] == 0x03 && data[2] == 0x02:
+			flow.TLS.Version = "TLS 1.1"
+		default:
+			flow.TLS.Version = fmt.Sprintf("TLS %d.%d", data[1], data[2])
+		}
+
+		// Extract SNI, cipher suites, and ALPN from ClientHello
+		tlsInfo := extractTLSClientHelloInfo(data)
+		if tlsInfo.SNI != "" {
+			flow.TLS.SNI = tlsInfo.SNI
+		}
+		if len(tlsInfo.CipherSuites) > 0 {
+			// Convert cipher suite IDs to human-readable names, filtering out GREASE values
+			cipherSuiteNames := make([]string, 0, len(tlsInfo.CipherSuites))
+			for _, id := range tlsInfo.CipherSuites {
+				if !isGREASE(id) {
+					cipherSuiteNames = append(cipherSuiteNames, CipherSuiteName(id))
+				}
+			}
+			flow.TLS.CipherSuites = cipherSuiteNames
+		}
+		if len(tlsInfo.ALPNProtocols) > 0 {
+			flow.TLS.ALPN = tlsInfo.ALPNProtocols
+		}
+
+		if flow.Protocol == protocol.ProtocolTLS {
+			flow.Protocol = protocol.ProtocolHTTPS
+		}
 	}
 
-	if flow.Protocol == protocol.ProtocolTLS {
-		flow.Protocol = protocol.ProtocolHTTPS
+	// Parse ServerHello to get negotiated cipher suite (if not already extracted)
+	if flow.TLS != nil && flow.TLS.CipherSuite == "" && flow.ServerData.Len() > 0 {
+		serverData := flow.ServerData.Bytes()
+		if negotiatedID, ok := extractServerHelloCipher(serverData); ok {
+			flow.TLS.CipherSuite = CipherSuiteName(negotiatedID)
+		}
 	}
+}
+
+// isGREASE returns true if the cipher suite ID is a GREASE value (RFC 8701).
+// GREASE values follow the pattern 0x?a?a where ? is the same nibble.
+func isGREASE(id uint16) bool {
+	return (id & 0x0f0f) == 0x0a0a
+}
+
+// extractServerHelloCipher extracts the negotiated cipher suite from a TLS ServerHello message.
+func extractServerHelloCipher(data []byte) (uint16, bool) {
+	// Need at least: TLS record header (5) + handshake header (4) + version (2) + random (32) + session ID len (1) = 44
+	if len(data) < 44 {
+		return 0, false
+	}
+
+	// Verify TLS Handshake record
+	if data[0] != 0x16 {
+		return 0, false
+	}
+
+	// Handshake type at offset 5 should be 0x02 (ServerHello)
+	if data[5] != 0x02 {
+		return 0, false
+	}
+
+	// Skip: TLS record header (5) + handshake header (4) + version (2) + random (32)
+	offset := 5 + 4 + 2 + 32 // = 43
+
+	if offset >= len(data) {
+		return 0, false
+	}
+
+	// Session ID length
+	sessionIDLen := int(data[offset])
+	offset += 1 + sessionIDLen
+
+	// Need 2 bytes for cipher suite
+	if offset+2 > len(data) {
+		return 0, false
+	}
+
+	// The negotiated cipher suite (2 bytes, big-endian)
+	cipherID := uint16(data[offset])<<8 | uint16(data[offset+1])
+	return cipherID, true
 }
 
 // tlsClientHelloInfo holds parsed TLS ClientHello data
