@@ -116,8 +116,12 @@ export function FlowDetail({ flow, onClose, onDownloadPCAP, onOpenTerminal }: Fl
 
         {/* Advanced Metrics */}
         <CollapsibleSection title="Advanced Metrics" icon={<Activity className="w-4 h-4" />}>
-          <div className="text-xs text-gray-500">
-            Performance metrics will be displayed here.
+          <div className="grid grid-cols-2 gap-4">
+            <MetricItem
+              label="Time to First Byte"
+              value={flow.ttfbMs ? `${flow.ttfbMs.toFixed(1)}ms` : 'N/A'}
+              indicator={getTTFBIndicator(flow.ttfbMs)}
+            />
           </div>
         </CollapsibleSection>
 
@@ -346,6 +350,31 @@ function StatusBadge({ code, text }: { code: number; text: string }) {
       <span className="font-semibold">{code}</span>
       <span className="text-xs opacity-80">{text}</span>
     </span>
+  )
+}
+
+function getTTFBIndicator(ttfbMs: number | undefined): 'success' | 'warning' | 'error' | null {
+  if (!ttfbMs || ttfbMs === 0) return null
+  if (ttfbMs < 200) return 'success'
+  if (ttfbMs <= 600) return 'warning'
+  return 'error'
+}
+
+function MetricItem({ label, value, indicator }: { label: string; value: string; indicator?: 'success' | 'warning' | 'error' | null }) {
+  const getIndicatorClass = () => {
+    switch (indicator) {
+      case 'success': return 'text-status-success'
+      case 'warning': return 'text-status-warning'
+      case 'error': return 'text-status-error'
+      default: return 'text-gray-400'
+    }
+  }
+
+  return (
+    <div className="glass-card p-3">
+      <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">{label}</div>
+      <div className={`text-sm font-semibold font-mono ${getIndicatorClass()}`}>{value}</div>
+    </div>
   )
 }
 
