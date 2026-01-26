@@ -1,5 +1,6 @@
+import { useState } from 'react'
 import { Flow } from '../types'
-import { X, Download, ArrowRight, Lock, Terminal, Clock, Send, Inbox, Shield, Globe, Server } from 'lucide-react'
+import { X, Download, ArrowRight, Lock, Terminal, Clock, Send, Inbox, Shield, Globe, Server, ChevronDown, Activity } from 'lucide-react'
 import { formatBytes } from '../utils'
 
 interface FlowDetailProps {
@@ -113,6 +114,22 @@ export function FlowDetail({ flow, onClose, onDownloadPCAP, onOpenTerminal }: Fl
           </div>
         </Section>
 
+        {/* Advanced Metrics */}
+        <CollapsibleSection title="Advanced Metrics" icon={<Activity className="w-4 h-4" />}>
+          <div className="grid grid-cols-3 gap-4">
+            <MetricItem
+              label="Time to First Byte"
+              value={flow.ttfbMs ? `${flow.ttfbMs.toFixed(1)}ms` : 'N/A'}
+              indicator={getTTFBIndicator(flow.ttfbMs)}
+            />
+            <MetricItem
+              label="Throughput"
+              value={calculateThroughput(flow.bytesSent, flow.bytesReceived, flow.duration)}
+            />
+            <ProtocolVersionBadge version={getProtocolVersionFromALPN(flow.tls?.alpn)} />
+          </div>
+        </CollapsibleSection>
+
         {/* TLS Info */}
         {flow.tls && (
           <Section title="TLS / Encryption" icon={<Shield className="w-4 h-4" />}>
@@ -121,9 +138,12 @@ export function FlowDetail({ flow, onClose, onDownloadPCAP, onOpenTerminal }: Fl
                 <InfoItem label="Version" value={flow.tls.version} />
                 {flow.tls.sni && <InfoItem label="SNI" value={flow.tls.sni} />}
               </div>
-              {flow.tls.cipherSuite && <InfoItem label="Cipher Suite" value={flow.tls.cipherSuite} />}
+              {flow.tls.cipherSuite && <InfoItem label="Negotiated Cipher" value={flow.tls.cipherSuite} />}
+              {flow.tls.cipherSuites && flow.tls.cipherSuites.length > 0 && (
+                <CipherSuitesList cipherSuites={flow.tls.cipherSuites} />
+              )}
               {flow.tls.alpn && flow.tls.alpn.length > 0 && (
-                <InfoItem label="ALPN" value={flow.tls.alpn.join(', ')} />
+                <ALPNProtocolsList protocols={flow.tls.alpn} />
               )}
               <div className="flex items-center gap-3 p-3 rounded-lg bg-amber-500/5 border border-amber-500/20">
                 <Lock className="w-4 h-4 text-amber-400" />
@@ -148,9 +168,7 @@ export function FlowDetail({ flow, onClose, onDownloadPCAP, onOpenTerminal }: Fl
                 {flow.http.requestHeaders && Object.keys(flow.http.requestHeaders).length > 0 && (
                   <HeadersTable headers={flow.http.requestHeaders} title="Headers" />
                 )}
-                {flow.http.requestBody && (
-                  <CodeBlock title="Request Body" content={flow.http.requestBody} />
-                )}
+                <BodyPreview title="Request Body" content={flow.http.requestBody} />
               </div>
             </Section>
 
@@ -166,9 +184,7 @@ export function FlowDetail({ flow, onClose, onDownloadPCAP, onOpenTerminal }: Fl
                 {flow.http.responseHeaders && Object.keys(flow.http.responseHeaders).length > 0 && (
                   <HeadersTable headers={flow.http.responseHeaders} title="Headers" />
                 )}
-                {flow.http.responseBody && (
-                  <CodeBlock title="Response Body (truncated)" content={flow.http.responseBody} />
-                )}
+                <BodyPreview title="Response Body" content={flow.http.responseBody} />
               </div>
             </Section>
           </>
@@ -186,6 +202,30 @@ function Section({ title, icon, children }: { title: string; icon?: React.ReactN
         <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">{title}</h3>
       </div>
       {children}
+    </div>
+  )
+}
+
+function CollapsibleSection({ title, icon, children, defaultOpen = true }: { title: string; icon?: React.ReactNode; children: React.ReactNode; defaultOpen?: boolean }) {
+  const [isOpen, setIsOpen] = useState(defaultOpen)
+
+  return (
+    <div className="animate-fade-in glass-card overflow-hidden">
+      <button
+        onClick={() => setIsOpen(!isOpen)}
+        className="w-full flex items-center justify-between p-4 hover:bg-void-700/30 transition-colors"
+      >
+        <div className="flex items-center gap-2">
+          {icon && <span className="text-glow-400/60">{icon}</span>}
+          <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">{title}</h3>
+        </div>
+        <ChevronDown className={`w-4 h-4 text-gray-500 transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`} />
+      </button>
+      {isOpen && (
+        <div className="p-4 pt-0 border-t border-void-700/30">
+          {children}
+        </div>
+      )}
     </div>
   )
 }
@@ -290,11 +330,15 @@ function HeadersTable({ headers, title }: { headers: Record<string, string>; tit
   )
 }
 
-function CodeBlock({ title, content }: { title: string; content: string }) {
+function BodyPreview({ title, content }: { title: string; content: string | undefined }) {
+  if (!content) {
+    return null
+  }
+
   return (
     <div>
       <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-2">{title}</div>
-      <pre className="glass-card p-3 text-xs font-mono text-gray-300 overflow-x-auto max-h-48 whitespace-pre-wrap break-all">
+      <pre className="font-mono text-sm text-gray-300 bg-void-900 border border-void-700 p-3 rounded-lg max-h-[200px] overflow-y-auto whitespace-pre-wrap break-all">
         {content}
       </pre>
     </div>
@@ -317,8 +361,116 @@ function StatusBadge({ code, text }: { code: number; text: string }) {
   )
 }
 
+function getTTFBIndicator(ttfbMs: number | undefined): 'success' | 'warning' | 'error' | null {
+  if (!ttfbMs || ttfbMs === 0) return null
+  if (ttfbMs < 200) return 'success'
+  if (ttfbMs <= 600) return 'warning'
+  return 'error'
+}
+
+function calculateThroughput(bytesSent: number, bytesReceived: number, durationMs: number): string {
+  if (!durationMs || durationMs === 0) return 'N/A'
+  const totalBytes = bytesSent + bytesReceived
+  const durationSeconds = durationMs / 1000
+  const bytesPerSecond = totalBytes / durationSeconds
+  return formatBytes(bytesPerSecond) + '/s'
+}
+
+function getProtocolVersionFromALPN(alpn: string[] | undefined): 'HTTP/2' | 'HTTP/1.1' | 'Unknown' {
+  if (!alpn || alpn.length === 0) return 'Unknown'
+  if (alpn.includes('h2')) return 'HTTP/2'
+  if (alpn.includes('http/1.1')) return 'HTTP/1.1'
+  return 'Unknown'
+}
+
+function MetricItem({ label, value, indicator }: { label: string; value: string; indicator?: 'success' | 'warning' | 'error' | null }) {
+  const getIndicatorClass = () => {
+    switch (indicator) {
+      case 'success': return 'text-status-success'
+      case 'warning': return 'text-status-warning'
+      case 'error': return 'text-status-error'
+      default: return 'text-gray-400'
+    }
+  }
+
+  return (
+    <div className="glass-card p-3">
+      <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">{label}</div>
+      <div className={`text-sm font-semibold font-mono ${getIndicatorClass()}`}>{value}</div>
+    </div>
+  )
+}
+
+function ProtocolVersionBadge({ version }: { version: 'HTTP/2' | 'HTTP/1.1' | 'Unknown' }) {
+  const getBadgeStyle = () => {
+    switch (version) {
+      case 'HTTP/2':
+        return 'text-status-success bg-status-success/10 border-status-success/30'
+      case 'HTTP/1.1':
+        return 'text-status-info bg-status-info/10 border-status-info/30'
+      default:
+        return 'text-gray-400 bg-gray-500/10 border-gray-500/30'
+    }
+  }
+
+  return (
+    <div className="glass-card p-3">
+      <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Protocol Version</div>
+      <span className={`inline-flex items-center px-2 py-0.5 rounded-md font-mono text-xs border ${getBadgeStyle()}`}>
+        {version}
+      </span>
+    </div>
+  )
+}
+
+function CipherSuitesList({ cipherSuites }: { cipherSuites: string[] }) {
+  if (!cipherSuites || cipherSuites.length === 0) {
+    return null
+  }
+
+  return (
+    <div>
+      <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-2">Offered Cipher Suites</div>
+      <div className="max-h-[120px] overflow-y-auto rounded-lg bg-void-900 border border-void-700 p-3">
+        <div className="flex flex-wrap gap-1.5">
+          {cipherSuites.map((suite, index) => (
+            <span
+              key={index}
+              className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-mono bg-void-700/50 text-gray-300 border border-void-600/50"
+            >
+              {suite}
+            </span>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function ALPNProtocolsList({ protocols }: { protocols: string[] }) {
+  if (!protocols || protocols.length === 0) {
+    return null
+  }
+
+  return (
+    <div>
+      <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-2">ALPN Protocols</div>
+      <div className="flex flex-wrap gap-1.5">
+        {protocols.map((protocol, index) => (
+          <span
+            key={index}
+            className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-mono bg-glow-400/10 text-glow-400 border border-glow-400/30"
+          >
+            {protocol}
+          </span>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function TimingBar({ flow }: { flow: Flow }) {
-  const segments: { label: string; value: number; color: string }[] = []
+  const segments: { label: string; value: number; color: string; ttfbValue?: number }[] = []
   let total = 0
 
   if (flow.tcpHandshakeMs) {
@@ -334,7 +486,7 @@ function TimingBar({ flow }: { flow: Flow }) {
   if (flow.ttfbMs) {
     const processing = flow.ttfbMs - total
     if (processing > 0) {
-      segments.push({ label: 'TTFB', value: processing, color: 'bg-status-success' })
+      segments.push({ label: 'TTFB', value: processing, color: 'bg-status-success', ttfbValue: flow.ttfbMs })
       total = flow.ttfbMs
     }
   }
@@ -352,7 +504,7 @@ function TimingBar({ flow }: { flow: Flow }) {
             key={i}
             className={`${seg.color} h-full transition-all duration-500`}
             style={{ width: `${(seg.value / total) * 100}%` }}
-            title={`${seg.label}: ${seg.value.toFixed(1)}ms`}
+            title={seg.ttfbValue ? `${seg.label}: ${seg.ttfbValue.toFixed(1)}ms` : `${seg.label}: ${seg.value.toFixed(1)}ms`}
           />
         ))}
       </div>
@@ -363,7 +515,7 @@ function TimingBar({ flow }: { flow: Flow }) {
           <div key={i} className="flex items-center gap-2">
             <div className={`w-2.5 h-2.5 rounded-full ${seg.color}`} />
             <span className="text-[11px] text-gray-400">
-              {seg.label}: <span className="text-white font-mono">{seg.value.toFixed(1)}ms</span>
+              {seg.label}: <span className="text-white font-mono">{seg.ttfbValue ? seg.ttfbValue.toFixed(1) : seg.value.toFixed(1)}ms</span>
             </span>
           </div>
         ))}
