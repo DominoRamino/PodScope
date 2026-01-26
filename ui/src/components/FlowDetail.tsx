@@ -1,5 +1,6 @@
+import { useState } from 'react'
 import { Flow } from '../types'
-import { X, Download, ArrowRight, Lock, Terminal, Clock, Send, Inbox, Shield, Globe, Server } from 'lucide-react'
+import { X, Download, ArrowRight, Lock, Terminal, Clock, Send, Inbox, Shield, Globe, Server, ChevronDown, Activity } from 'lucide-react'
 import { formatBytes } from '../utils'
 
 interface FlowDetailProps {
@@ -113,6 +114,13 @@ export function FlowDetail({ flow, onClose, onDownloadPCAP, onOpenTerminal }: Fl
           </div>
         </Section>
 
+        {/* Advanced Metrics */}
+        <CollapsibleSection title="Advanced Metrics" icon={<Activity className="w-4 h-4" />}>
+          <div className="text-xs text-gray-500">
+            Performance metrics will be displayed here.
+          </div>
+        </CollapsibleSection>
+
         {/* TLS Info */}
         {flow.tls && (
           <Section title="TLS / Encryption" icon={<Shield className="w-4 h-4" />}>
@@ -186,6 +194,30 @@ function Section({ title, icon, children }: { title: string; icon?: React.ReactN
         <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">{title}</h3>
       </div>
       {children}
+    </div>
+  )
+}
+
+function CollapsibleSection({ title, icon, children, defaultOpen = true }: { title: string; icon?: React.ReactNode; children: React.ReactNode; defaultOpen?: boolean }) {
+  const [isOpen, setIsOpen] = useState(defaultOpen)
+
+  return (
+    <div className="animate-fade-in glass-card overflow-hidden">
+      <button
+        onClick={() => setIsOpen(!isOpen)}
+        className="w-full flex items-center justify-between p-4 hover:bg-void-700/30 transition-colors"
+      >
+        <div className="flex items-center gap-2">
+          {icon && <span className="text-glow-400/60">{icon}</span>}
+          <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">{title}</h3>
+        </div>
+        <ChevronDown className={`w-4 h-4 text-gray-500 transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`} />
+      </button>
+      {isOpen && (
+        <div className="p-4 pt-0 border-t border-void-700/30">
+          {children}
+        </div>
+      )}
     </div>
   )
 }
