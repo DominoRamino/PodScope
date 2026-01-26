@@ -345,7 +345,7 @@ func (a *TCPAssembler) parseTLS(flow *TCPFlow) {
 		flow.TLS.Version = fmt.Sprintf("TLS %d.%d", data[1], data[2])
 	}
 
-	// Extract SNI and cipher suites from ClientHello
+	// Extract SNI, cipher suites, and ALPN from ClientHello
 	tlsInfo := extractTLSClientHelloInfo(data)
 	if tlsInfo.SNI != "" {
 		flow.TLS.SNI = tlsInfo.SNI
@@ -358,6 +358,9 @@ func (a *TCPAssembler) parseTLS(flow *TCPFlow) {
 		}
 		flow.TLS.CipherSuites = cipherSuiteNames
 	}
+	if len(tlsInfo.ALPNProtocols) > 0 {
+		flow.TLS.ALPN = tlsInfo.ALPNProtocols
+	}
 
 	if flow.Protocol == protocol.ProtocolTLS {
 		flow.Protocol = protocol.ProtocolHTTPS
@@ -366,8 +369,9 @@ func (a *TCPAssembler) parseTLS(flow *TCPFlow) {
 
 // tlsClientHelloInfo holds parsed TLS ClientHello data
 type tlsClientHelloInfo struct {
-	SNI          string
-	CipherSuites []uint16
+	SNI           string
+	CipherSuites  []uint16
+	ALPNProtocols []string
 }
 
 // extractTLSClientHelloInfo extracts SNI and cipher suites from TLS ClientHello
@@ -438,19 +442,52 @@ func extractTLSClientHelloInfo(data []byte) tlsClientHelloInfo {
 		extLen := int(data[offset+2])<<8 | int(data[offset+3])
 		offset += 4
 
+		extEnd := offset + extLen
+		if extEnd > len(data) {
+			extEnd = len(data)
+		}
+
 		if extType == 0 { // Server Name extension
-			if offset+2 < len(data) {
+			if offset+2 <= extEnd {
 				// Skip list length (2 bytes)
 				listLen := int(data[offset])<<8 | int(data[offset+1])
-				offset += 2
+				nameOffset := offset + 2
 
-				if offset+3 < len(data) && listLen > 0 {
-					nameType := data[offset]
-					nameLen := int(data[offset+1])<<8 | int(data[offset+2])
-					offset += 3
+				if nameOffset+3 <= extEnd && listLen > 0 {
+					nameType := data[nameOffset]
+					nameLen := int(data[nameOffset+1])<<8 | int(data[nameOffset+2])
+					nameOffset += 3
 
-					if nameType == 0 && offset+nameLen <= len(data) {
-						result.SNI = string(data[offset : offset+nameLen])
+					if nameType == 0 && nameOffset+nameLen <= extEnd {
+						result.SNI = string(data[nameOffset : nameOffset+nameLen])
+					}
+				}
+			}
+		} else if extType == 16 { // ALPN extension
+			// ALPN extension format:
+			// - Protocol name list length (2 bytes)
+			// - For each protocol:
+			//   - Protocol name length (1 byte)
+			//   - Protocol name (variable)
+			if offset+2 <= extEnd {
+				alpnListLen := int(data[offset])<<8 | int(data[offset+1])
+				alpnOffset := offset + 2
+				alpnEnd := alpnOffset + alpnListLen
+				if alpnEnd > extEnd {
+					alpnEnd = extEnd
+				}
+
+				for alpnOffset < alpnEnd {
+					if alpnOffset >= len(data) {
+						break
+					}
+					protoLen := int(data[alpnOffset])
+					alpnOffset++
+					if protoLen > 0 && alpnOffset+protoLen <= alpnEnd {
+						result.ALPNProtocols = append(result.ALPNProtocols, string(data[alpnOffset:alpnOffset+protoLen]))
+						alpnOffset += protoLen
+					} else {
+						break // Malformed, stop parsing ALPN
 					}
 				}
 			}
