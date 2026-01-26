@@ -34,7 +34,13 @@ help:
 	@echo "  make test             - Run Go backend tests"
 	@echo "  make test-ui          - Run UI tests (single run)"
 	@echo ""
-	@echo "Version Management:"
+	@echo "Stress Testing (run in podinfo pod for capture):"
+	@echo "  make stress-test                - Run stress test (100 requests, 10 concurrent)"
+	@echo "  make stress-test REQUESTS=500   - Custom request count"
+	@echo "  make stress-test-no-keepalive   - Disable connection reuse (1 flow per request)"
+	@echo "  make stress-test-list           - List all test endpoints"
+	@echo ""
+	@echo "Version Management:
 	@echo "  make version     - Show current version info"
 	@echo "  make inspect     - Inspect image labels"
 
@@ -194,8 +200,42 @@ restart-test-pods:
 	@kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=podinfo -n default --timeout=60s
 	@echo "✓ Test pods restarted"
 
-# Run unit tests
-test:
-	@echo "Running unit tests..."
-	go test -v -race ./pkg/...
-	@echo "✓ Tests complete"
+# =============================================================================
+# Stress Testing Targets
+# =============================================================================
+
+# Build stress test binary for Linux (to run in pods)
+build-stress-test:
+	@echo "Building stress test binary (Linux)..."
+	@cd scripts && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o stress-test stress-test.go
+	@echo "✓ Stress test binary built: scripts/stress-test"
+
+# Copy stress test to a running podinfo pod and execute it
+# Usage: make stress-test REQUESTS=200 CONCURRENCY=10
+REQUESTS ?= 100
+CONCURRENCY ?= 10
+stress-test: build-stress-test
+	@echo "Running stress test inside podinfo pod..."
+	@POD=$$(kubectl get pod -l app.kubernetes.io/name=podinfo -n default -o jsonpath='{.items[0].metadata.name}'); \
+	echo "Target pod: $$POD"; \
+	kubectl cp scripts/stress-test default/$$POD:/tmp/stress-test; \
+	kubectl exec -n default $$POD -- chmod +x /tmp/stress-test; \
+	kubectl exec -n default $$POD -- /tmp/stress-test -n $(REQUESTS) -c $(CONCURRENCY) -v
+
+# Run stress test with verbose output (shows each request)
+stress-test-verbose: build-stress-test
+	@POD=$$(kubectl get pod -l app.kubernetes.io/name=podinfo -n default -o jsonpath='{.items[0].metadata.name}'); \
+	kubectl cp scripts/stress-test default/$$POD:/tmp/stress-test; \
+	kubectl exec -n default $$POD -- chmod +x /tmp/stress-test; \
+	kubectl exec -n default $$POD -- /tmp/stress-test -n $(REQUESTS) -c $(CONCURRENCY) -v
+
+# Run stress test with no keep-alive (creates 1 TCP flow per request)
+stress-test-no-keepalive: build-stress-test
+	@POD=$$(kubectl get pod -l app.kubernetes.io/name=podinfo -n default -o jsonpath='{.items[0].metadata.name}'); \
+	kubectl cp scripts/stress-test default/$$POD:/tmp/stress-test; \
+	kubectl exec -n default $$POD -- chmod +x /tmp/stress-test; \
+	kubectl exec -n default $$POD -- /tmp/stress-test -n $(REQUESTS) -c $(CONCURRENCY) -no-keepalive
+
+# List all available stress test endpoints
+stress-test-list:
+	@cd scripts && go run stress-test.go -list
