@@ -56,9 +56,12 @@ type TCPFlow struct {
 	RSTSeen     bool
 
 	// Timing
-	SYNTime     time.Time
-	SYNACKTime  time.Time
-	FirstDataTime time.Time
+	SYNTime              time.Time
+	SYNACKTime           time.Time
+	FirstDataTime        time.Time
+	FirstServerDataTime  time.Time // For TTFB calculation (first byte FROM server)
+	TLSClientHelloTime   time.Time // Start of TLS handshake
+	TLSAppDataTime       time.Time // First TLS Application Data (end of handshake)
 
 	// Data buffers
 	ClientData  bytes.Buffer
@@ -213,11 +216,27 @@ func (a *TCPAssembler) ProcessPacket(srcIP, dstIP string, srcPort, dstPort uint1
 			flow.PacketsRecv++
 			flow.BytesReceived += uint64(len(payload))
 			flow.ServerData.Write(payload)
+			// Track first server response byte for TTFB
+			if flow.FirstServerDataTime.IsZero() {
+				flow.FirstServerDataTime = timestamp
+			}
 		}
 
 		// Try to detect protocol from first data packet
 		if flow.Protocol == protocol.ProtocolTCP {
 			flow.Protocol = a.detectProtocol(payload, dstPort)
+		}
+
+		// Track TLS timing events
+		if len(payload) > 0 {
+			// TLS record type 0x16 = Handshake (ClientHello starts here)
+			if payload[0] == 0x16 && flow.TLSClientHelloTime.IsZero() && isFromClient {
+				flow.TLSClientHelloTime = timestamp
+			}
+			// TLS record type 0x17 = Application Data (handshake complete)
+			if payload[0] == 0x17 && flow.TLSAppDataTime.IsZero() {
+				flow.TLSAppDataTime = timestamp
+			}
 		}
 
 		// Parse protocol-specific data
@@ -604,6 +623,25 @@ func (a *TCPAssembler) completeFlow(key string, flow *TCPFlow) {
 	// Calculate timing
 	if flow.SYNSeen && flow.SYNACKSeen {
 		f.TCPHandshakeMs = flow.SYNACKTime.Sub(flow.SYNTime).Seconds() * 1000
+	}
+
+	// Calculate TLS handshake timing
+	// TLS handshake = time from ClientHello to first Application Data
+	if !flow.TLSClientHelloTime.IsZero() && !flow.TLSAppDataTime.IsZero() {
+		f.TLSHandshakeMs = flow.TLSAppDataTime.Sub(flow.TLSClientHelloTime).Seconds() * 1000
+	}
+
+	// Calculate TTFB (Time To First Byte from server)
+	// For TLS: TTFB = time from SYN to first Application Data (after handshake)
+	// For non-TLS: TTFB = time from SYN to first server response byte
+	if !flow.SYNTime.IsZero() {
+		if !flow.TLSAppDataTime.IsZero() {
+			// TLS connection: use Application Data time (actual response, not handshake)
+			f.TimeToFirstByte = flow.TLSAppDataTime.Sub(flow.SYNTime).Seconds() * 1000
+		} else if !flow.FirstServerDataTime.IsZero() {
+			// Non-TLS connection: use first server data time
+			f.TimeToFirstByte = flow.FirstServerDataTime.Sub(flow.SYNTime).Seconds() * 1000
+		}
 	}
 
 	// Set status
