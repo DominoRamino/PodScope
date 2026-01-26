@@ -1,7 +1,7 @@
-import { Flow } from '../types'
-import { ArrowRight, Lock, Radar, Globe, Server } from 'lucide-react'
+import { Flow, SortColumn, SortConfig } from '../types'
+import { ArrowRight, ArrowUp, ArrowDown, ArrowUpDown, Lock, Radar, Globe, Server } from 'lucide-react'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { useRef, memo } from 'react'
+import { useRef, memo, useState, useMemo } from 'react'
 import { formatBytes, formatTime } from '../utils'
 
 interface FlowListProps {
@@ -13,8 +13,85 @@ interface FlowListProps {
 export function FlowList({ flows, selectedId, onSelect }: FlowListProps) {
   const parentRef = useRef<HTMLDivElement>(null)
 
+  const [sortConfig, setSortConfig] = useState<SortConfig>({
+    column: 'timestamp',
+    direction: 'desc',
+  })
+
+  const handleSort = (column: SortColumn) => {
+    setSortConfig(prev => {
+      if (prev.column === column) {
+        return { column, direction: prev.direction === 'asc' ? 'desc' : 'asc' }
+      }
+      const defaultDesc: SortColumn[] = ['timestamp', 'latency', 'size', 'status']
+      return { column, direction: defaultDesc.includes(column) ? 'desc' : 'asc' }
+    })
+  }
+
+  const sortedFlows = useMemo(() => {
+    const sorted = [...flows]
+
+    const getSourceString = (f: Flow): string =>
+      (f.srcPod || `${f.srcIp}:${f.srcPort}`).toLowerCase()
+
+    const getDestinationString = (f: Flow): string =>
+      (f.http?.host || f.tls?.sni || f.dstService || f.dstPod || `${f.dstIp}:${f.dstPort}`).toLowerCase()
+
+    const getLatencyValue = (f: Flow): number =>
+      f.ttfbMs ?? f.tcpHandshakeMs ?? -1
+
+    const getStatusValue = (f: Flow): number => {
+      if (f.http?.statusCode) return f.http.statusCode
+      switch (f.status) {
+        case 'CLOSED': return 0
+        case 'OPEN': return 1
+        case 'TIMEOUT': return 2
+        case 'RESET': return 3
+        default: return -1
+      }
+    }
+
+    const direction = sortConfig.direction === 'asc' ? 1 : -1
+
+    sorted.sort((a, b) => {
+      let cmp = 0
+      switch (sortConfig.column) {
+        case 'timestamp':
+          cmp = new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+          break
+        case 'source':
+          cmp = getSourceString(a).localeCompare(getSourceString(b))
+          break
+        case 'destination':
+          cmp = getDestinationString(a).localeCompare(getDestinationString(b))
+          break
+        case 'protocol':
+          cmp = a.protocol.localeCompare(b.protocol)
+          break
+        case 'status':
+          cmp = getStatusValue(a) - getStatusValue(b)
+          break
+        case 'latency': {
+          const la = getLatencyValue(a)
+          const lb = getLatencyValue(b)
+          if (la === -1 && lb === -1) { cmp = 0; break }
+          if (la === -1) return 1
+          if (lb === -1) return -1
+          cmp = la - lb
+          break
+        }
+        case 'size':
+          cmp = (a.bytesSent + a.bytesReceived) - (b.bytesSent + b.bytesReceived)
+          break
+      }
+      return cmp * direction
+    })
+
+    return sorted
+  }, [flows, sortConfig])
+
   const rowVirtualizer = useVirtualizer({
-    count: flows.length,
+    count: sortedFlows.length,
     getScrollElement: () => parentRef.current,
     estimateSize: () => 64,
     overscan: 10,
@@ -23,19 +100,33 @@ export function FlowList({ flows, selectedId, onSelect }: FlowListProps) {
   return (
     <div className="h-full flex flex-col">
       {/* Table Header */}
-      <div className="bg-void-900/80 backdrop-blur-xl border-b border-glow-400/5 px-6 py-3 grid grid-cols-12 gap-4 text-[11px] font-semibold text-gray-500 uppercase tracking-wider flex-shrink-0">
-        <div className="col-span-2">Timestamp</div>
-        <div className="col-span-3">Source</div>
-        <div className="col-span-3">Destination</div>
-        <div className="col-span-1 text-center">Protocol</div>
-        <div className="col-span-1 text-center">Status</div>
-        <div className="col-span-1 text-right">Latency</div>
-        <div className="col-span-1 text-right">Size</div>
+      <div className="bg-void-900/80 backdrop-blur-xl border-b border-glow-400/5 px-6 py-3 grid grid-cols-12 gap-4 flex-shrink-0">
+        <div className="col-span-2">
+          <SortableHeader label="Timestamp" column="timestamp" currentSort={sortConfig} onSort={handleSort} />
+        </div>
+        <div className="col-span-3">
+          <SortableHeader label="Source" column="source" currentSort={sortConfig} onSort={handleSort} />
+        </div>
+        <div className="col-span-3">
+          <SortableHeader label="Destination" column="destination" currentSort={sortConfig} onSort={handleSort} />
+        </div>
+        <div className="col-span-1 flex justify-center">
+          <SortableHeader label="Protocol" column="protocol" currentSort={sortConfig} onSort={handleSort} />
+        </div>
+        <div className="col-span-1 flex justify-center">
+          <SortableHeader label="Status" column="status" currentSort={sortConfig} onSort={handleSort} />
+        </div>
+        <div className="col-span-1 flex justify-end">
+          <SortableHeader label="Latency" column="latency" currentSort={sortConfig} onSort={handleSort} />
+        </div>
+        <div className="col-span-1 flex justify-end">
+          <SortableHeader label="Size" column="size" currentSort={sortConfig} onSort={handleSort} />
+        </div>
       </div>
 
       {/* Virtualized Flow Rows */}
       <div ref={parentRef} className="flex-1 overflow-y-auto">
-        {flows.length === 0 ? (
+        {sortedFlows.length === 0 ? (
           <EmptyState />
         ) : (
           <div
@@ -46,7 +137,7 @@ export function FlowList({ flows, selectedId, onSelect }: FlowListProps) {
             }}
           >
             {rowVirtualizer.getVirtualItems().map((virtualRow) => {
-              const flow = flows[virtualRow.index]
+              const flow = sortedFlows[virtualRow.index]
               return (
                 <div
                   key={flow.id}
@@ -247,3 +338,33 @@ const FlowRowMemo = memo(function FlowRow({ flow, selected, onClick, index }: Fl
          prev.flow.bytesReceived === next.flow.bytesReceived &&
          prev.selected === next.selected
 })
+
+interface SortableHeaderProps {
+  label: string
+  column: SortColumn
+  currentSort: SortConfig
+  onSort: (column: SortColumn) => void
+}
+
+function SortableHeader({ label, column, currentSort, onSort }: SortableHeaderProps) {
+  const isActive = currentSort.column === column
+  return (
+    <button
+      onClick={() => onSort(column)}
+      className={`flex items-center gap-1 group cursor-pointer select-none transition-colors duration-150 text-[11px] font-semibold uppercase tracking-wider ${
+        isActive ? 'text-glow-400' : 'text-gray-500 hover:text-gray-300'
+      }`}
+    >
+      <span>{label}</span>
+      <span className={`transition-opacity duration-150 ${isActive ? 'opacity-100' : 'opacity-0 group-hover:opacity-50'}`}>
+        {isActive ? (
+          currentSort.direction === 'asc'
+            ? <ArrowUp className="w-3 h-3" />
+            : <ArrowDown className="w-3 h-3" />
+        ) : (
+          <ArrowUpDown className="w-3 h-3" />
+        )}
+      </span>
+    </button>
+  )
+}
