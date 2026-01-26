@@ -184,9 +184,7 @@ export function FlowDetail({ flow, onClose, onDownloadPCAP, onOpenTerminal }: Fl
                 {flow.http.responseHeaders && Object.keys(flow.http.responseHeaders).length > 0 && (
                   <HeadersTable headers={flow.http.responseHeaders} title="Headers" />
                 )}
-                {flow.http.responseBody && (
-                  <CodeBlock title="Response Body (truncated)" content={flow.http.responseBody} />
-                )}
+                <BodyPreview title="Response Body" content={flow.http.responseBody} />
               </div>
             </Section>
           </>
@@ -328,17 +326,6 @@ function HeadersTable({ headers, title }: { headers: Record<string, string>; tit
           </div>
         ))}
       </div>
-    </div>
-  )
-}
-
-function CodeBlock({ title, content }: { title: string; content: string }) {
-  return (
-    <div>
-      <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-2">{title}</div>
-      <pre className="glass-card p-3 text-xs font-mono text-gray-300 overflow-x-auto max-h-48 whitespace-pre-wrap break-all">
-        {content}
-      </pre>
     </div>
   )
 }
