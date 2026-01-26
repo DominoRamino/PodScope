@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Flow } from '../types'
-import { X, Download, ArrowRight, Lock, Terminal, Clock, Send, Inbox, Shield, Globe, Server, ChevronDown, Activity } from 'lucide-react'
+import { X, Download, Loader2, ArrowRight, Lock, Terminal, Clock, Send, Inbox, Shield, Globe, Server, ChevronDown, Activity } from 'lucide-react'
 import { formatBytes } from '../utils'
 
 interface FlowDetailProps {
@@ -8,9 +8,10 @@ interface FlowDetailProps {
   onClose: () => void
   onDownloadPCAP: () => void
   onOpenTerminal?: (podName: string) => void
+  isDownloading: boolean
 }
 
-export function FlowDetail({ flow, onClose, onDownloadPCAP, onOpenTerminal }: FlowDetailProps) {
+export function FlowDetail({ flow, onClose, onDownloadPCAP, onOpenTerminal, isDownloading }: FlowDetailProps) {
   const formatTimestamp = (timestamp: string): string => {
     const date = new Date(timestamp)
     return date.toLocaleString()
@@ -33,9 +34,14 @@ export function FlowDetail({ flow, onClose, onDownloadPCAP, onOpenTerminal }: Fl
           <button
             onClick={onDownloadPCAP}
             className="btn-ghost"
-            title="Download PCAP"
+            title={isDownloading ? "Downloading..." : "Download PCAP"}
+            disabled={isDownloading}
           >
-            <Download className="w-4 h-4" />
+            {isDownloading ? (
+              <Loader2 className="w-4 h-4 animate-spin text-glow-400" />
+            ) : (
+              <Download className="w-4 h-4" />
+            )}
           </button>
           <button onClick={onClose} className="btn-ghost">
             <X className="w-4 h-4" />

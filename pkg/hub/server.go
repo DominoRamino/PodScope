@@ -513,6 +513,7 @@ func (s *Server) handleDownloadPCAP(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/vnd.tcpdump.pcap")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=podscope-%s.pcap", s.sessionID))
+	w.Header().Set("Content-Length", strconv.Itoa(len(pcapData)))
 	w.Write(pcapData)
 }
 
@@ -548,6 +549,7 @@ func (s *Server) handleDownloadStreamPCAP(w http.ResponseWriter, r *http.Request
 
 	w.Header().Set("Content-Type", "application/vnd.tcpdump.pcap")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=stream-%s.pcap", streamID))
+	w.Header().Set("Content-Length", strconv.Itoa(len(pcapData)))
 	w.Write(pcapData)
 }
 
@@ -679,20 +681,25 @@ func (s *Server) initK8sClient() error {
 	return nil
 }
 
-// getAgentContainer finds the podscope agent ephemeral container in a pod
+// getAgentContainer finds the latest podscope agent ephemeral container in a pod.
+// Ephemeral containers are appended to the list, so the last match is the most recent.
 func (s *Server) getAgentContainer(ctx context.Context, namespace, podName string) (string, error) {
 	pod, err := s.k8sClient.CoreV1().Pods(namespace).Get(ctx, podName, metav1.GetOptions{})
 	if err != nil {
 		return "", fmt.Errorf("failed to get pod: %w", err)
 	}
 
+	latest := ""
 	for _, ec := range pod.Spec.EphemeralContainers {
 		if strings.HasPrefix(ec.Name, "podscope-agent") {
-			return ec.Name, nil
+			latest = ec.Name
 		}
 	}
 
-	return "", fmt.Errorf("no podscope agent container found in pod %s/%s", namespace, podName)
+	if latest == "" {
+		return "", fmt.Errorf("no podscope agent container found in pod %s/%s", namespace, podName)
+	}
+	return latest, nil
 }
 
 // handleTerminalWebSocket handles WebSocket connections for terminal exec

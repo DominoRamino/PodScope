@@ -22,6 +22,7 @@ const createDefaultProps = () => ({
   onClearPCAP: vi.fn(),
   isPaused: false,
   onTogglePause: vi.fn(),
+  isDownloading: false,
 })
 
 describe('Header component', () => {

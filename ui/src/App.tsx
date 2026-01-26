@@ -34,6 +34,7 @@ function App() {
   const [stats, setStats] = useState({ flows: 0, wsClients: 0, pcapSize: 0, pcapFull: false, paused: false })
   const [terminalTarget, setTerminalTarget] = useState<TerminalTarget | null>(null)
   const [terminalMaximized, setTerminalMaximized] = useState(false)
+  const [downloading, setDownloading] = useState(false)
 
   const isPausedRef = useRef(false)
   useEffect(() => {
@@ -214,35 +215,31 @@ function App() {
     }
   }, [stats.paused])
 
-  const handleDownloadPCAP = useCallback(async (streamId?: string) => {
-    try {
-      let url = streamId ? `/api/pcap/${streamId}` : '/api/pcap'
-      const params = new URLSearchParams()
+  const handleDownloadPCAP = useCallback((streamId?: string) => {
+    let url = streamId ? `/api/pcap/${streamId}` : '/api/pcap'
+    const params = new URLSearchParams()
 
-      if (filterOptions.showOnlyHTTP) params.set('onlyHTTP', 'true')
-      if (filterOptions.showAllPorts) params.set('allPorts', 'true')
-      if (filter) params.set('search', filter)
+    if (filterOptions.showOnlyHTTP) params.set('onlyHTTP', 'true')
+    if (filterOptions.showAllPorts) params.set('allPorts', 'true')
+    if (filter) params.set('search', filter)
 
-      if (params.toString()) {
-        url += '?' + params.toString()
-      }
-
-      const res = await fetch(url)
-      if (!res.ok) throw new Error('Download failed')
-
-      const blob = await res.blob()
-      const downloadUrl = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = downloadUrl
-      const filterSuffix = filterOptions.showOnlyHTTP ? '-http' : filterOptions.showAllPorts ? '-all' : ''
-      a.download = streamId ? `stream-${streamId}${filterSuffix}.pcap` : `podscope-session${filterSuffix}.pcap`
-      document.body.appendChild(a)
-      a.click()
-      document.body.removeChild(a)
-      URL.revokeObjectURL(downloadUrl)
-    } catch (err) {
-      console.error('Failed to download PCAP:', err)
+    if (params.toString()) {
+      url += '?' + params.toString()
     }
+
+    // Show brief loading state for visual feedback
+    setDownloading(true)
+    setTimeout(() => setDownloading(false), 2000)
+
+    // Use direct navigation so the browser handles the download natively.
+    // The server sets Content-Disposition: attachment, so the browser will
+    // show this in its download manager with a progress bar.
+    const a = document.createElement('a')
+    a.href = url
+    a.download = ''
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
   }, [filterOptions, filter])
 
   const handleClearPCAP = useCallback(async () => {
@@ -283,6 +280,7 @@ function App() {
           onClearPCAP={handleClearPCAP}
           isPaused={stats.paused}
           onTogglePause={handleTogglePause}
+          isDownloading={downloading}
         />
 
         <div className="flex-1 flex min-h-0 overflow-hidden">
@@ -303,6 +301,7 @@ function App() {
                 onClose={() => setSelectedFlow(null)}
                 onDownloadPCAP={() => handleDownloadPCAP(selectedFlow.id)}
                 onOpenTerminal={handleOpenTerminal}
+                isDownloading={downloading}
               />
             </div>
           )}

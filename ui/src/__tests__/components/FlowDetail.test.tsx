@@ -10,6 +10,7 @@ const createDefaultProps = () => ({
   onClose: vi.fn(),
   onDownloadPCAP: vi.fn(),
   onOpenTerminal: vi.fn(),
+  isDownloading: false,
 })
 
 describe('FlowDetail component', () => {

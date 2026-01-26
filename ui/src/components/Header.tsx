@@ -1,4 +1,4 @@
-import { Search, Download, Pause, Play, Filter, ChevronDown, Sparkles, HardDrive, Activity, Waves, Trash2, X, Check, AlertTriangle } from 'lucide-react'
+import { Search, Download, Loader2, Pause, Play, Filter, ChevronDown, Sparkles, HardDrive, Activity, Waves, Trash2, X, Check, AlertTriangle } from 'lucide-react'
 import { useState, useRef, useEffect } from 'react'
 import { formatBytes } from '../utils'
 import { bpfPresets, type BPFPreset } from '../lib/bpfPresets'
@@ -23,6 +23,7 @@ interface HeaderProps {
   onClearPCAP: () => void
   isPaused: boolean
   onTogglePause: () => void
+  isDownloading: boolean
 }
 
 export function Header({
@@ -39,6 +40,7 @@ export function Header({
   onClearPCAP,
   isPaused,
   onTogglePause,
+  isDownloading,
 }: HeaderProps) {
   const [bpfFilter, setBpfFilter] = useState('')
   const [currentBPFFilter, setCurrentBPFFilter] = useState('')
@@ -294,9 +296,15 @@ Rules:
           </button>
 
           {/* Download */}
-          <button onClick={onDownloadPCAP} className="btn-primary">
-            <Download className="w-4 h-4" />
-            <span className="hidden sm:inline">Download</span>
+          <button onClick={onDownloadPCAP} className="btn-primary" disabled={isDownloading}>
+            {isDownloading ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <Download className="w-4 h-4" />
+            )}
+            <span className="hidden sm:inline">
+              {isDownloading ? 'Downloading...' : 'Download'}
+            </span>
           </button>
         </div>
       </div>

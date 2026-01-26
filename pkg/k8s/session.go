@@ -663,20 +663,25 @@ func (s *Session) ExecInPod(ctx context.Context, namespace, podName, container s
 	})
 }
 
-// GetAgentContainer finds the podscope agent ephemeral container in a pod
+// GetAgentContainer finds the latest podscope agent ephemeral container in a pod.
+// Ephemeral containers are appended to the list, so the last match is the most recent.
 func (s *Session) GetAgentContainer(ctx context.Context, namespace, podName string) (string, error) {
 	pod, err := s.client.clientset.CoreV1().Pods(namespace).Get(ctx, podName, metav1.GetOptions{})
 	if err != nil {
 		return "", fmt.Errorf("failed to get pod: %w", err)
 	}
 
+	latest := ""
 	for _, ec := range pod.Spec.EphemeralContainers {
 		if strings.HasPrefix(ec.Name, "podscope-agent") {
-			return ec.Name, nil
+			latest = ec.Name
 		}
 	}
 
-	return "", fmt.Errorf("no podscope agent container found in pod %s/%s", namespace, podName)
+	if latest == "" {
+		return "", fmt.Errorf("no podscope agent container found in pod %s/%s", namespace, podName)
+	}
+	return latest, nil
 }
 
 // Client returns the underlying Kubernetes client
