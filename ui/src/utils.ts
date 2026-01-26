@@ -28,6 +28,18 @@ export function formatTime(timestamp: string): string {
 }
 
 /**
+ * Formats a duration in milliseconds into a human-readable string.
+ * Uses seconds if >= 1000ms, otherwise milliseconds.
+ * @param ms - Duration in milliseconds
+ * @returns A formatted string like "123ms" or "1.5s"
+ */
+export function formatDuration(ms: number): string {
+  if (!ms || ms <= 0) return '-'
+  if (ms >= 1000) return `${(ms / 1000).toFixed(1)}s`
+  return `${ms.toFixed(0)}ms`
+}
+
+/**
  * Returns Tailwind CSS classes for coloring protocol badges.
  * @param protocol - The protocol type ('HTTP', 'HTTPS', 'TLS', 'TCP')
  * @returns Tailwind CSS classes for text and background colors

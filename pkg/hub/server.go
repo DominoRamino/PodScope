@@ -101,7 +101,7 @@ func NewServer(httpPort, grpcPort int) *Server {
 				return true // Allow all origins for local development
 			},
 		},
-		pcapBuffer: NewPCAPBuffer(pcapDir, 50*1024*1024), // 50MB rolling buffer
+		pcapBuffer: NewPCAPBuffer(pcapDir, 100*1024*1024), // 100MB buffer (stops capturing when full)
 	}
 
 	// Start batch ticker for WebSocket batching
@@ -569,6 +569,7 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		"flowCapacity": s.flowBuffer.Capacity(),
 		"wsClients":    clientCount,
 		"pcapSize":     s.pcapBuffer.Size(),
+		"pcapFull":     s.pcapBuffer.IsFull(),
 		"sessionId":    s.sessionID,
 		"uptime":       time.Now().UTC(),
 		"paused":       paused,
