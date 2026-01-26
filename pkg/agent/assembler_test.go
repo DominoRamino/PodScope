@@ -1433,6 +1433,588 @@ func TestSetHubIP(t *testing.T) {
 	}
 }
 
+// =============================================================================
+// Test extractTLSClientHelloInfo - cipher suites extraction
+// =============================================================================
+
+func TestExtractTLSClientHelloInfo_CipherSuites(t *testing.T) {
+	// Use the existing test ClientHello which has cipher suites:
+	// 0x1301 (TLS_AES_128_GCM_SHA256) and 0x1302 (TLS_AES_256_GCM_SHA384)
+	info := extractTLSClientHelloInfo(tlsClientHelloWithSNI)
+
+	if len(info.CipherSuites) != 2 {
+		t.Fatalf("CipherSuites length = %d, want 2", len(info.CipherSuites))
+	}
+
+	// Check the cipher suite IDs are correctly extracted
+	if info.CipherSuites[0] != 0x1301 {
+		t.Errorf("CipherSuites[0] = 0x%04x, want 0x1301", info.CipherSuites[0])
+	}
+	if info.CipherSuites[1] != 0x1302 {
+		t.Errorf("CipherSuites[1] = 0x%04x, want 0x1302", info.CipherSuites[1])
+	}
+}
+
+func TestExtractTLSClientHelloInfo_SingleCipherSuite(t *testing.T) {
+	// ClientHello without SNI has 1 cipher suite: 0x002f (TLS_RSA_WITH_AES_128_CBC_SHA)
+	info := extractTLSClientHelloInfo(tlsClientHelloWithoutSNI)
+
+	if len(info.CipherSuites) != 1 {
+		t.Fatalf("CipherSuites length = %d, want 1", len(info.CipherSuites))
+	}
+
+	if info.CipherSuites[0] != 0x002f {
+		t.Errorf("CipherSuites[0] = 0x%04x, want 0x002f", info.CipherSuites[0])
+	}
+}
+
+func TestExtractTLSClientHelloInfo_MultipleCipherSuites(t *testing.T) {
+	// Build a ClientHello with multiple cipher suites
+	clientHello := buildClientHelloWithCipherSuites([]uint16{
+		0x1301, // TLS_AES_128_GCM_SHA256
+		0x1302, // TLS_AES_256_GCM_SHA384
+		0xc02f, // TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+		0xc030, // TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+		0x0a0a, // GREASE
+	}, nil, "")
+
+	info := extractTLSClientHelloInfo(clientHello)
+
+	if len(info.CipherSuites) != 5 {
+		t.Fatalf("CipherSuites length = %d, want 5", len(info.CipherSuites))
+	}
+
+	expectedCiphers := []uint16{0x1301, 0x1302, 0xc02f, 0xc030, 0x0a0a}
+	for i, expected := range expectedCiphers {
+		if info.CipherSuites[i] != expected {
+			t.Errorf("CipherSuites[%d] = 0x%04x, want 0x%04x", i, info.CipherSuites[i], expected)
+		}
+	}
+}
+
+func TestExtractTLSClientHelloInfo_TruncatedCipherSuites(t *testing.T) {
+	// Build a ClientHello and truncate it during cipher suites
+	clientHello := buildClientHelloWithCipherSuites([]uint16{0x1301, 0x1302}, nil, "")
+
+	// Truncate during cipher suites (after cipher suite length but before all ciphers)
+	// TLS record (5) + handshake (4) + version (2) + random (32) + session ID len (1) = 44
+	// + cipher suite length (2) = 46
+	// + 1 byte (partial cipher suite) = 47
+	truncated := clientHello[:47]
+
+	info := extractTLSClientHelloInfo(truncated)
+
+	// Should return empty since cipher suites are incomplete
+	if len(info.CipherSuites) != 0 {
+		t.Errorf("CipherSuites length = %d, want 0 for truncated data", len(info.CipherSuites))
+	}
+}
+
+// =============================================================================
+// Test CipherSuiteName - cipher suite ID to name mapping
+// =============================================================================
+
+func TestCipherSuiteName_TLS13Suites(t *testing.T) {
+	tests := []struct {
+		id       uint16
+		expected string
+	}{
+		{0x1301, "TLS_AES_128_GCM_SHA256"},
+		{0x1302, "TLS_AES_256_GCM_SHA384"},
+		{0x1303, "TLS_CHACHA20_POLY1305_SHA256"},
+		{0x1304, "TLS_AES_128_CCM_SHA256"},
+		{0x1305, "TLS_AES_128_CCM_8_SHA256"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.expected, func(t *testing.T) {
+			name := CipherSuiteName(tt.id)
+			if name != tt.expected {
+				t.Errorf("CipherSuiteName(0x%04x) = %q, want %q", tt.id, name, tt.expected)
+			}
+		})
+	}
+}
+
+func TestCipherSuiteName_TLS12ECDHESuites(t *testing.T) {
+	tests := []struct {
+		id       uint16
+		expected string
+	}{
+		{0xc02b, "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256"},
+		{0xc02c, "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384"},
+		{0xc02f, "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256"},
+		{0xc030, "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.expected, func(t *testing.T) {
+			name := CipherSuiteName(tt.id)
+			if name != tt.expected {
+				t.Errorf("CipherSuiteName(0x%04x) = %q, want %q", tt.id, name, tt.expected)
+			}
+		})
+	}
+}
+
+func TestCipherSuiteName_ChaCha20Suites(t *testing.T) {
+	tests := []struct {
+		id       uint16
+		expected string
+	}{
+		{0xcca8, "TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256"},
+		{0xcca9, "TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256"},
+		{0xccaa, "TLS_DHE_RSA_WITH_CHACHA20_POLY1305_SHA256"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.expected, func(t *testing.T) {
+			name := CipherSuiteName(tt.id)
+			if name != tt.expected {
+				t.Errorf("CipherSuiteName(0x%04x) = %q, want %q", tt.id, name, tt.expected)
+			}
+		})
+	}
+}
+
+func TestCipherSuiteName_GREASEValues(t *testing.T) {
+	greaseValues := []uint16{
+		0x0a0a, 0x1a1a, 0x2a2a, 0x3a3a, 0x4a4a,
+		0x5a5a, 0x6a6a, 0x7a7a, 0x8a8a, 0x9a9a,
+		0xaaaa, 0xbaba, 0xcaca, 0xdada, 0xeaea, 0xfafa,
+	}
+
+	for _, id := range greaseValues {
+		t.Run("GREASE_"+string(rune(id>>8))+"_"+string(rune(id&0xff)), func(t *testing.T) {
+			name := CipherSuiteName(id)
+			if name != "GREASE" {
+				t.Errorf("CipherSuiteName(0x%04x) = %q, want %q", id, name, "GREASE")
+			}
+		})
+	}
+}
+
+func TestCipherSuiteName_UnknownSuite(t *testing.T) {
+	// Unknown cipher suite should return hex format
+	id := uint16(0xbeef)
+	expected := "0xbeef"
+	name := CipherSuiteName(id)
+	if name != expected {
+		t.Errorf("CipherSuiteName(0x%04x) = %q, want %q", id, name, expected)
+	}
+}
+
+func TestCipherSuiteName_UnknownSuiteLeadingZeros(t *testing.T) {
+	// Verify leading zeros are preserved in hex output
+	id := uint16(0x00ff)
+	expected := "0x00ff"
+	name := CipherSuiteName(id)
+	if name != expected {
+		t.Errorf("CipherSuiteName(0x%04x) = %q, want %q", id, name, expected)
+	}
+}
+
+func TestCipherSuiteName_LegacySuites(t *testing.T) {
+	tests := []struct {
+		id       uint16
+		expected string
+	}{
+		{0x000a, "TLS_RSA_WITH_3DES_EDE_CBC_SHA"},
+		{0x002f, "TLS_RSA_WITH_AES_128_CBC_SHA"},
+		{0x0035, "TLS_RSA_WITH_AES_256_CBC_SHA"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.expected, func(t *testing.T) {
+			name := CipherSuiteName(tt.id)
+			if name != tt.expected {
+				t.Errorf("CipherSuiteName(0x%04x) = %q, want %q", tt.id, name, tt.expected)
+			}
+		})
+	}
+}
+
+// =============================================================================
+// Test extractTLSClientHelloInfo - ALPN extraction
+// =============================================================================
+
+// TLS ClientHello with ALPN extension containing "h2" and "http/1.1"
+var tlsClientHelloWithALPN = buildClientHelloWithCipherSuites(
+	[]uint16{0x1301, 0x1302},
+	[]string{"h2", "http/1.1"},
+	"example.com",
+)
+
+func TestExtractTLSClientHelloInfo_ALPNProtocols(t *testing.T) {
+	info := extractTLSClientHelloInfo(tlsClientHelloWithALPN)
+
+	if len(info.ALPNProtocols) != 2 {
+		t.Fatalf("ALPNProtocols length = %d, want 2", len(info.ALPNProtocols))
+	}
+
+	if info.ALPNProtocols[0] != "h2" {
+		t.Errorf("ALPNProtocols[0] = %q, want %q", info.ALPNProtocols[0], "h2")
+	}
+	if info.ALPNProtocols[1] != "http/1.1" {
+		t.Errorf("ALPNProtocols[1] = %q, want %q", info.ALPNProtocols[1], "http/1.1")
+	}
+}
+
+func TestExtractTLSClientHelloInfo_ALPNWithSNI(t *testing.T) {
+	// Verify both SNI and ALPN are extracted from the same ClientHello
+	info := extractTLSClientHelloInfo(tlsClientHelloWithALPN)
+
+	if info.SNI != "example.com" {
+		t.Errorf("SNI = %q, want %q", info.SNI, "example.com")
+	}
+
+	if len(info.ALPNProtocols) != 2 {
+		t.Errorf("ALPNProtocols length = %d, want 2", len(info.ALPNProtocols))
+	}
+}
+
+func TestExtractTLSClientHelloInfo_SingleALPNProtocol(t *testing.T) {
+	clientHello := buildClientHelloWithCipherSuites(
+		[]uint16{0x1301},
+		[]string{"h2"},
+		"",
+	)
+
+	info := extractTLSClientHelloInfo(clientHello)
+
+	if len(info.ALPNProtocols) != 1 {
+		t.Fatalf("ALPNProtocols length = %d, want 1", len(info.ALPNProtocols))
+	}
+
+	if info.ALPNProtocols[0] != "h2" {
+		t.Errorf("ALPNProtocols[0] = %q, want %q", info.ALPNProtocols[0], "h2")
+	}
+}
+
+func TestExtractTLSClientHelloInfo_MultipleALPNProtocols(t *testing.T) {
+	clientHello := buildClientHelloWithCipherSuites(
+		[]uint16{0x1301},
+		[]string{"h2", "http/1.1", "spdy/3.1"},
+		"",
+	)
+
+	info := extractTLSClientHelloInfo(clientHello)
+
+	if len(info.ALPNProtocols) != 3 {
+		t.Fatalf("ALPNProtocols length = %d, want 3", len(info.ALPNProtocols))
+	}
+
+	expectedProtocols := []string{"h2", "http/1.1", "spdy/3.1"}
+	for i, expected := range expectedProtocols {
+		if info.ALPNProtocols[i] != expected {
+			t.Errorf("ALPNProtocols[%d] = %q, want %q", i, info.ALPNProtocols[i], expected)
+		}
+	}
+}
+
+func TestExtractTLSClientHelloInfo_NoALPNExtension(t *testing.T) {
+	// ClientHello without ALPN extension
+	clientHello := buildClientHelloWithCipherSuites(
+		[]uint16{0x1301},
+		nil, // No ALPN
+		"example.com",
+	)
+
+	info := extractTLSClientHelloInfo(clientHello)
+
+	if len(info.ALPNProtocols) != 0 {
+		t.Errorf("ALPNProtocols length = %d, want 0 when no ALPN extension", len(info.ALPNProtocols))
+	}
+}
+
+func TestExtractTLSClientHelloInfo_ALPNBeforeSNI(t *testing.T) {
+	// Build ClientHello where ALPN extension comes before SNI
+	// This tests that the extension loop correctly parses both
+	clientHello := buildClientHelloWithExtensionOrder(
+		[]uint16{0x1301},
+		[]string{"h2"},
+		"test.example.com",
+		true, // ALPN before SNI
+	)
+
+	info := extractTLSClientHelloInfo(clientHello)
+
+	if info.SNI != "test.example.com" {
+		t.Errorf("SNI = %q, want %q", info.SNI, "test.example.com")
+	}
+
+	if len(info.ALPNProtocols) != 1 || info.ALPNProtocols[0] != "h2" {
+		t.Errorf("ALPNProtocols = %v, want [h2]", info.ALPNProtocols)
+	}
+}
+
+func TestExtractTLSClientHelloInfo_MalformedALPN_TruncatedList(t *testing.T) {
+	// Build ClientHello with malformed ALPN (truncated protocol list)
+	clientHello := buildMalformedALPNClientHello("truncated_list")
+
+	info := extractTLSClientHelloInfo(clientHello)
+
+	// Should handle gracefully - no panic, may return partial or empty
+	_ = info.ALPNProtocols // Just verify no panic
+}
+
+func TestExtractTLSClientHelloInfo_MalformedALPN_ZeroLengthProtocol(t *testing.T) {
+	// Build ClientHello with malformed ALPN (zero-length protocol)
+	clientHello := buildMalformedALPNClientHello("zero_length_protocol")
+
+	info := extractTLSClientHelloInfo(clientHello)
+
+	// Should handle gracefully - no panic
+	_ = info.ALPNProtocols
+}
+
+// =============================================================================
+// Test parseTLS - integration test for cipher suite name conversion
+// =============================================================================
+
+func TestParseTLS_CipherSuiteNamesConverted(t *testing.T) {
+	assembler := newTestAssembler()
+	flow := &TCPFlow{
+		ID:       "test123",
+		Protocol: protocol.ProtocolTLS,
+	}
+
+	// Use ClientHello with known cipher suites
+	flow.ClientData.Write(tlsClientHelloWithSNI)
+
+	assembler.parseTLS(flow)
+
+	if flow.TLS == nil {
+		t.Fatal("parseTLS() did not set TLS info")
+	}
+
+	// Cipher suites should be human-readable names
+	if len(flow.TLS.CipherSuites) != 2 {
+		t.Fatalf("TLS.CipherSuites length = %d, want 2", len(flow.TLS.CipherSuites))
+	}
+
+	if flow.TLS.CipherSuites[0] != "TLS_AES_128_GCM_SHA256" {
+		t.Errorf("TLS.CipherSuites[0] = %q, want %q", flow.TLS.CipherSuites[0], "TLS_AES_128_GCM_SHA256")
+	}
+	if flow.TLS.CipherSuites[1] != "TLS_AES_256_GCM_SHA384" {
+		t.Errorf("TLS.CipherSuites[1] = %q, want %q", flow.TLS.CipherSuites[1], "TLS_AES_256_GCM_SHA384")
+	}
+}
+
+func TestParseTLS_ALPNPopulated(t *testing.T) {
+	assembler := newTestAssembler()
+	flow := &TCPFlow{
+		ID:       "test123",
+		Protocol: protocol.ProtocolTLS,
+	}
+
+	// Use ClientHello with ALPN
+	flow.ClientData.Write(tlsClientHelloWithALPN)
+
+	assembler.parseTLS(flow)
+
+	if flow.TLS == nil {
+		t.Fatal("parseTLS() did not set TLS info")
+	}
+
+	if len(flow.TLS.ALPN) != 2 {
+		t.Fatalf("TLS.ALPN length = %d, want 2", len(flow.TLS.ALPN))
+	}
+
+	if flow.TLS.ALPN[0] != "h2" {
+		t.Errorf("TLS.ALPN[0] = %q, want %q", flow.TLS.ALPN[0], "h2")
+	}
+	if flow.TLS.ALPN[1] != "http/1.1" {
+		t.Errorf("TLS.ALPN[1] = %q, want %q", flow.TLS.ALPN[1], "http/1.1")
+	}
+}
+
+func TestParseTLS_UnknownCipherSuiteHexFallback(t *testing.T) {
+	assembler := newTestAssembler()
+	flow := &TCPFlow{
+		ID:       "test123",
+		Protocol: protocol.ProtocolTLS,
+	}
+
+	// Build ClientHello with unknown cipher suite
+	clientHello := buildClientHelloWithCipherSuites([]uint16{0xbeef}, nil, "")
+	flow.ClientData.Write(clientHello)
+
+	assembler.parseTLS(flow)
+
+	if flow.TLS == nil {
+		t.Fatal("parseTLS() did not set TLS info")
+	}
+
+	if len(flow.TLS.CipherSuites) != 1 {
+		t.Fatalf("TLS.CipherSuites length = %d, want 1", len(flow.TLS.CipherSuites))
+	}
+
+	// Unknown cipher suite should fall back to hex
+	if flow.TLS.CipherSuites[0] != "0xbeef" {
+		t.Errorf("TLS.CipherSuites[0] = %q, want %q", flow.TLS.CipherSuites[0], "0xbeef")
+	}
+}
+
+// =============================================================================
+// Helper functions for building test TLS ClientHellos
+// =============================================================================
+
+// buildClientHelloWithCipherSuites creates a TLS ClientHello with specified cipher suites,
+// optional ALPN protocols, and optional SNI
+func buildClientHelloWithCipherSuites(cipherSuites []uint16, alpnProtocols []string, sni string) []byte {
+	return buildClientHelloWithExtensionOrder(cipherSuites, alpnProtocols, sni, false)
+}
+
+// buildClientHelloWithExtensionOrder builds a ClientHello with control over extension order
+func buildClientHelloWithExtensionOrder(cipherSuites []uint16, alpnProtocols []string, sni string, alpnBeforeSNI bool) []byte {
+	clientHello := make([]byte, 0, 512)
+
+	// Build extensions first to calculate total length
+	var extensions []byte
+
+	// Build SNI extension if provided
+	var sniExt []byte
+	if sni != "" {
+		sniExt = make([]byte, 0, 2+2+2+1+2+len(sni))
+		sniExt = append(sniExt, 0x00, 0x00) // Extension type: server_name (0)
+		sniExtLen := 2 + 1 + 2 + len(sni)   // list len + type + name len + name
+		sniExt = append(sniExt, byte(sniExtLen>>8), byte(sniExtLen&0xff))
+		sniExt = append(sniExt, byte((sniExtLen-2)>>8), byte((sniExtLen-2)&0xff)) // list length
+		sniExt = append(sniExt, 0x00)                                             // name type: hostname
+		sniExt = append(sniExt, byte(len(sni)>>8), byte(len(sni)&0xff))
+		sniExt = append(sniExt, []byte(sni)...)
+	}
+
+	// Build ALPN extension if provided
+	var alpnExt []byte
+	if len(alpnProtocols) > 0 {
+		alpnExt = make([]byte, 0, 64)
+		alpnExt = append(alpnExt, 0x00, 0x10) // Extension type: ALPN (16)
+
+		// Calculate ALPN data length
+		alpnListLen := 0
+		for _, proto := range alpnProtocols {
+			alpnListLen += 1 + len(proto) // length byte + protocol
+		}
+
+		alpnExtLen := 2 + alpnListLen // list length + protocols
+		alpnExt = append(alpnExt, byte(alpnExtLen>>8), byte(alpnExtLen&0xff))
+		alpnExt = append(alpnExt, byte(alpnListLen>>8), byte(alpnListLen&0xff))
+
+		for _, proto := range alpnProtocols {
+			alpnExt = append(alpnExt, byte(len(proto)))
+			alpnExt = append(alpnExt, []byte(proto)...)
+		}
+	}
+
+	// Order extensions based on flag
+	if alpnBeforeSNI {
+		extensions = append(extensions, alpnExt...)
+		extensions = append(extensions, sniExt...)
+	} else {
+		extensions = append(extensions, sniExt...)
+		extensions = append(extensions, alpnExt...)
+	}
+
+	// Calculate body length
+	cipherSuitesLen := len(cipherSuites) * 2
+	bodyLen := 2 + 32 + 1 + 2 + cipherSuitesLen + 1 + 1 + 2 + len(extensions)
+	// version + random + session ID len + cipher suites len + ciphers + compression len + compression + extensions len + extensions
+
+	recordLen := 4 + bodyLen // handshake header + body
+
+	// TLS Record Header (5 bytes)
+	clientHello = append(clientHello, 0x16)                                           // Content type: Handshake
+	clientHello = append(clientHello, 0x03, 0x01)                                     // Version: TLS 1.0 (record layer)
+	clientHello = append(clientHello, byte(recordLen>>8), byte(recordLen&0xff))       // Record length
+
+	// Handshake Header (4 bytes)
+	clientHello = append(clientHello, 0x01)                                           // Handshake type: ClientHello
+	clientHello = append(clientHello, 0x00, byte(bodyLen>>8), byte(bodyLen&0xff))     // Handshake length
+
+	// Version (2 bytes)
+	clientHello = append(clientHello, 0x03, 0x03) // TLS 1.2
+
+	// Random (32 bytes)
+	for i := 0; i < 32; i++ {
+		clientHello = append(clientHello, byte(i))
+	}
+
+	// Session ID length (1 byte)
+	clientHello = append(clientHello, 0x00)
+
+	// Cipher Suites
+	clientHello = append(clientHello, byte(cipherSuitesLen>>8), byte(cipherSuitesLen&0xff))
+	for _, suite := range cipherSuites {
+		clientHello = append(clientHello, byte(suite>>8), byte(suite&0xff))
+	}
+
+	// Compression Methods (1 byte length + 1 byte null)
+	clientHello = append(clientHello, 0x01, 0x00)
+
+	// Extensions
+	clientHello = append(clientHello, byte(len(extensions)>>8), byte(len(extensions)&0xff))
+	clientHello = append(clientHello, extensions...)
+
+	return clientHello
+}
+
+// buildMalformedALPNClientHello creates a ClientHello with malformed ALPN extension
+func buildMalformedALPNClientHello(malformType string) []byte {
+	clientHello := make([]byte, 0, 256)
+
+	// TLS Record Header
+	clientHello = append(clientHello, 0x16, 0x03, 0x01, 0x00, 0x50)
+
+	// Handshake Header
+	clientHello = append(clientHello, 0x01, 0x00, 0x00, 0x4c)
+
+	// Version
+	clientHello = append(clientHello, 0x03, 0x03)
+
+	// Random (32 bytes)
+	for i := 0; i < 32; i++ {
+		clientHello = append(clientHello, byte(i))
+	}
+
+	// Session ID length
+	clientHello = append(clientHello, 0x00)
+
+	// Cipher suites
+	clientHello = append(clientHello, 0x00, 0x02, 0x13, 0x01)
+
+	// Compression methods
+	clientHello = append(clientHello, 0x01, 0x00)
+
+	// Extensions with malformed ALPN
+	var alpnExt []byte
+	switch malformType {
+	case "truncated_list":
+		// ALPN extension with list length larger than actual data
+		alpnExt = []byte{
+			0x00, 0x10, // Extension type: ALPN
+			0x00, 0x10, // Extension length: 16 (but we only provide less)
+			0x00, 0x0e, // ALPN list length: 14 (but data is truncated)
+			0x02, 'h', '2', // Only provide 3 bytes instead of 14
+		}
+	case "zero_length_protocol":
+		// ALPN extension with zero-length protocol
+		alpnExt = []byte{
+			0x00, 0x10, // Extension type: ALPN
+			0x00, 0x04, // Extension length: 4
+			0x00, 0x02, // ALPN list length: 2
+			0x00,       // Zero-length protocol (invalid)
+			0x00,       // Padding
+		}
+	default:
+		alpnExt = []byte{}
+	}
+
+	clientHello = append(clientHello, byte(len(alpnExt)>>8), byte(len(alpnExt)&0xff))
+	clientHello = append(clientHello, alpnExt...)
+
+	return clientHello
 // Test HTTP body extraction - US-002, US-003, US-004, US-005
 
 func TestParseHTTP_ExtractsRequestBody_POST(t *testing.T) {
