@@ -313,7 +313,7 @@ func (a *TCPAssembler) parseHTTP(flow *TCPFlow) {
 	}
 }
 
-// parseTLS parses TLS ClientHello to extract SNI
+// parseTLS parses TLS ClientHello to extract SNI and cipher suites
 func (a *TCPAssembler) parseTLS(flow *TCPFlow) {
 	if flow.TLS != nil {
 		return // Already parsed
@@ -345,10 +345,13 @@ func (a *TCPAssembler) parseTLS(flow *TCPFlow) {
 		flow.TLS.Version = fmt.Sprintf("TLS %d.%d", data[1], data[2])
 	}
 
-	// Extract SNI from ClientHello (simplified)
-	sni := extractSNI(data)
-	if sni != "" {
-		flow.TLS.SNI = sni
+	// Extract SNI and cipher suites from ClientHello
+	tlsInfo := extractTLSClientHelloInfo(data)
+	if tlsInfo.SNI != "" {
+		flow.TLS.SNI = tlsInfo.SNI
+	}
+	if len(tlsInfo.CipherSuites) > 0 {
+		flow.TLS.CipherSuites = tlsInfo.CipherSuites
 	}
 
 	if flow.Protocol == protocol.ProtocolTLS {
@@ -356,11 +359,19 @@ func (a *TCPAssembler) parseTLS(flow *TCPFlow) {
 	}
 }
 
-// extractSNI extracts Server Name Indication from TLS ClientHello
-func extractSNI(data []byte) string {
+// tlsClientHelloInfo holds parsed TLS ClientHello data
+type tlsClientHelloInfo struct {
+	SNI          string
+	CipherSuites []uint16
+}
+
+// extractTLSClientHelloInfo extracts SNI and cipher suites from TLS ClientHello
+func extractTLSClientHelloInfo(data []byte) tlsClientHelloInfo {
+	result := tlsClientHelloInfo{}
+
 	// Skip TLS record header (5 bytes) and handshake header (4 bytes)
 	if len(data) < 43 {
-		return ""
+		return result
 	}
 
 	// ClientHello starts at offset 5
@@ -368,7 +379,7 @@ func extractSNI(data []byte) string {
 	offset := 5 + 1 + 3 + 2 + 32
 
 	if len(data) <= offset {
-		return ""
+		return result
 	}
 
 	// Session ID length
@@ -376,15 +387,27 @@ func extractSNI(data []byte) string {
 	offset += 1 + sessionIDLen
 
 	if len(data) <= offset+2 {
-		return ""
+		return result
 	}
 
-	// Cipher suites length
+	// Cipher suites length (2 bytes, big-endian)
 	cipherSuitesLen := int(data[offset])<<8 | int(data[offset+1])
-	offset += 2 + cipherSuitesLen
+	offset += 2
+
+	// Extract cipher suites before skipping
+	// Each cipher suite is 2 bytes (big-endian)
+	if len(data) >= offset+cipherSuitesLen {
+		numCipherSuites := cipherSuitesLen / 2
+		result.CipherSuites = make([]uint16, 0, numCipherSuites)
+		for i := 0; i < cipherSuitesLen; i += 2 {
+			cipherID := uint16(data[offset+i])<<8 | uint16(data[offset+i+1])
+			result.CipherSuites = append(result.CipherSuites, cipherID)
+		}
+	}
+	offset += cipherSuitesLen
 
 	if len(data) <= offset+1 {
-		return ""
+		return result
 	}
 
 	// Compression methods length
@@ -392,7 +415,7 @@ func extractSNI(data []byte) string {
 	offset += 1 + compMethodsLen
 
 	if len(data) <= offset+2 {
-		return ""
+		return result
 	}
 
 	// Extensions length
@@ -422,17 +445,21 @@ func extractSNI(data []byte) string {
 					offset += 3
 
 					if nameType == 0 && offset+nameLen <= len(data) {
-						return string(data[offset : offset+nameLen])
+						result.SNI = string(data[offset : offset+nameLen])
 					}
 				}
 			}
-			return ""
 		}
 
 		offset += extLen
 	}
 
-	return ""
+	return result
+}
+
+// extractSNI extracts Server Name Indication from TLS ClientHello (legacy wrapper)
+func extractSNI(data []byte) string {
+	return extractTLSClientHelloInfo(data).SNI
 }
 
 // completeFlow marks a flow as complete and sends it

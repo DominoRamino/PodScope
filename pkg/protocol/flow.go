@@ -89,6 +89,7 @@ type TLSInfo struct {
 	Version       string   `json:"version"`
 	SNI           string   `json:"sni"`
 	CipherSuite   string   `json:"cipherSuite"`
+	CipherSuites  []uint16 `json:"cipherSuites,omitempty"`
 	ALPN          []string `json:"alpn,omitempty"`
 	Encrypted     bool     `json:"encrypted"`
 }
