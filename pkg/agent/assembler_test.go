@@ -1432,3 +1432,229 @@ func TestSetHubIP(t *testing.T) {
 		t.Errorf("hubIP = %q, want %q", assembler.hubIP, "10.0.0.100")
 	}
 }
+
+// Test HTTP body extraction - US-002, US-003, US-004, US-005
+
+func TestParseHTTP_ExtractsRequestBody_POST(t *testing.T) {
+	assembler := newTestAssembler()
+	bodyContent := `{"name":"John","email":"john@example.com"}`
+	request := []byte("POST /api/users HTTP/1.1\r\nHost: example.com\r\nContent-Type: application/json\r\nContent-Length: 42\r\n\r\n" + bodyContent)
+	flow := newTestFlowWithHTTPData(request, nil)
+
+	assembler.parseHTTP(flow)
+
+	if flow.HTTP == nil {
+		t.Fatal("parseHTTP() did not set HTTP info")
+	}
+	if flow.HTTP.RequestBody != bodyContent {
+		t.Errorf("HTTP.RequestBody = %q, want %q", flow.HTTP.RequestBody, bodyContent)
+	}
+}
+
+func TestParseHTTP_ExtractsRequestBody_PUT(t *testing.T) {
+	assembler := newTestAssembler()
+	bodyContent := `{"status":"updated"}`
+	request := []byte("PUT /api/users/123 HTTP/1.1\r\nHost: example.com\r\nContent-Type: application/json\r\nContent-Length: 20\r\n\r\n" + bodyContent)
+	flow := newTestFlowWithHTTPData(request, nil)
+
+	assembler.parseHTTP(flow)
+
+	if flow.HTTP == nil {
+		t.Fatal("parseHTTP() did not set HTTP info")
+	}
+	if flow.HTTP.RequestBody != bodyContent {
+		t.Errorf("HTTP.RequestBody = %q, want %q", flow.HTTP.RequestBody, bodyContent)
+	}
+}
+
+func TestParseHTTP_ExtractsRequestBody_PATCH(t *testing.T) {
+	assembler := newTestAssembler()
+	bodyContent := `{"field":"value"}`
+	request := []byte("PATCH /api/items/1 HTTP/1.1\r\nHost: example.com\r\nContent-Type: application/json\r\nContent-Length: 17\r\n\r\n" + bodyContent)
+	flow := newTestFlowWithHTTPData(request, nil)
+
+	assembler.parseHTTP(flow)
+
+	if flow.HTTP == nil {
+		t.Fatal("parseHTTP() did not set HTTP info")
+	}
+	if flow.HTTP.RequestBody != bodyContent {
+		t.Errorf("HTTP.RequestBody = %q, want %q", flow.HTTP.RequestBody, bodyContent)
+	}
+}
+
+func TestParseHTTP_EmptyRequestBody(t *testing.T) {
+	assembler := newTestAssembler()
+	// GET request has no body
+	request := []byte("GET /api/users HTTP/1.1\r\nHost: example.com\r\n\r\n")
+	flow := newTestFlowWithHTTPData(request, nil)
+
+	assembler.parseHTTP(flow)
+
+	if flow.HTTP == nil {
+		t.Fatal("parseHTTP() did not set HTTP info")
+	}
+	// Empty body should result in empty string, not error
+	if flow.HTTP.RequestBody != "" {
+		t.Errorf("HTTP.RequestBody = %q, want empty string for GET request", flow.HTTP.RequestBody)
+	}
+}
+
+func TestParseHTTP_ExtractsResponseBody_JSON(t *testing.T) {
+	assembler := newTestAssembler()
+	request := []byte("GET /api/users HTTP/1.1\r\nHost: example.com\r\n\r\n")
+	responseBody := `{"users":[{"id":1,"name":"Alice"},{"id":2,"name":"Bob"}]}`
+	// Content-Length must match actual body length (57 bytes)
+	response := []byte("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 57\r\n\r\n" + responseBody)
+	flow := newTestFlowWithHTTPData(request, response)
+
+	assembler.parseHTTP(flow)
+
+	if flow.HTTP == nil {
+		t.Fatal("parseHTTP() did not set HTTP info")
+	}
+	if flow.HTTP.ResponseBody != responseBody {
+		t.Errorf("HTTP.ResponseBody = %q, want %q", flow.HTTP.ResponseBody, responseBody)
+	}
+}
+
+func TestParseHTTP_ExtractsResponseBody_HTML(t *testing.T) {
+	assembler := newTestAssembler()
+	request := []byte("GET /index.html HTTP/1.1\r\nHost: example.com\r\n\r\n")
+	responseBody := `<!DOCTYPE html><html><body><h1>Hello World</h1></body></html>`
+	// Content-Length must match actual body length (61 bytes)
+	response := []byte("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 61\r\n\r\n" + responseBody)
+	flow := newTestFlowWithHTTPData(request, response)
+
+	assembler.parseHTTP(flow)
+
+	if flow.HTTP == nil {
+		t.Fatal("parseHTTP() did not set HTTP info")
+	}
+	if flow.HTTP.ResponseBody != responseBody {
+		t.Errorf("HTTP.ResponseBody = %q, want %q", flow.HTTP.ResponseBody, responseBody)
+	}
+}
+
+func TestParseHTTP_ExtractsResponseBody_PlainText(t *testing.T) {
+	assembler := newTestAssembler()
+	request := []byte("GET /health HTTP/1.1\r\nHost: example.com\r\n\r\n")
+	responseBody := "OK"
+	response := []byte("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 2\r\n\r\n" + responseBody)
+	flow := newTestFlowWithHTTPData(request, response)
+
+	assembler.parseHTTP(flow)
+
+	if flow.HTTP == nil {
+		t.Fatal("parseHTTP() did not set HTTP info")
+	}
+	if flow.HTTP.ResponseBody != responseBody {
+		t.Errorf("HTTP.ResponseBody = %q, want %q", flow.HTTP.ResponseBody, responseBody)
+	}
+}
+
+func TestParseHTTP_EmptyResponseBody(t *testing.T) {
+	assembler := newTestAssembler()
+	request := []byte("DELETE /api/users/123 HTTP/1.1\r\nHost: example.com\r\n\r\n")
+	// 204 No Content has no body
+	response := []byte("HTTP/1.1 204 No Content\r\n\r\n")
+	flow := newTestFlowWithHTTPData(request, response)
+
+	assembler.parseHTTP(flow)
+
+	if flow.HTTP == nil {
+		t.Fatal("parseHTTP() did not set HTTP info")
+	}
+	// Empty body should result in empty string, not error
+	if flow.HTTP.ResponseBody != "" {
+		t.Errorf("HTTP.ResponseBody = %q, want empty string for 204 response", flow.HTTP.ResponseBody)
+	}
+}
+
+func TestParseHTTP_ChunkedTransferEncoding(t *testing.T) {
+	assembler := newTestAssembler()
+	request := []byte("GET /api/stream HTTP/1.1\r\nHost: example.com\r\n\r\n")
+	// Chunked response: "Hello" (5 bytes) + "World" (5 bytes)
+	response := []byte("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nHello\r\n5\r\nWorld\r\n0\r\n\r\n")
+	flow := newTestFlowWithHTTPData(request, response)
+
+	assembler.parseHTTP(flow)
+
+	if flow.HTTP == nil {
+		t.Fatal("parseHTTP() did not set HTTP info")
+	}
+	// Go's http package handles chunked encoding transparently
+	// The body should be decoded
+	expectedBody := "HelloWorld"
+	if flow.HTTP.ResponseBody != expectedBody {
+		t.Errorf("HTTP.ResponseBody = %q, want %q for chunked response", flow.HTTP.ResponseBody, expectedBody)
+	}
+}
+
+func TestParseHTTP_BodyTruncatedToMaxBodySize(t *testing.T) {
+	assembler := newTestAssembler()
+	request := []byte("GET /api/large HTTP/1.1\r\nHost: example.com\r\n\r\n")
+
+	// Create a response body larger than MaxBodySize (1024 bytes)
+	largeBody := make([]byte, 2048)
+	for i := range largeBody {
+		largeBody[i] = 'A'
+	}
+
+	response := []byte("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 2048\r\n\r\n")
+	response = append(response, largeBody...)
+	flow := newTestFlowWithHTTPData(request, response)
+
+	assembler.parseHTTP(flow)
+
+	if flow.HTTP == nil {
+		t.Fatal("parseHTTP() did not set HTTP info")
+	}
+	// Body should be truncated to MaxBodySize (1024 bytes)
+	if len(flow.HTTP.ResponseBody) > MaxBodySize {
+		t.Errorf("HTTP.ResponseBody length = %d, should be <= MaxBodySize (%d)", len(flow.HTTP.ResponseBody), MaxBodySize)
+	}
+	if len(flow.HTTP.ResponseBody) != MaxBodySize {
+		t.Errorf("HTTP.ResponseBody length = %d, want %d (MaxBodySize)", len(flow.HTTP.ResponseBody), MaxBodySize)
+	}
+}
+
+func TestParseHTTP_ContentLengthRespected(t *testing.T) {
+	assembler := newTestAssembler()
+	request := []byte("GET /api/data HTTP/1.1\r\nHost: example.com\r\n\r\n")
+
+	// Content-Length says 5
+	actualBody := "Hello"
+	response := []byte("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 5\r\n\r\n" + actualBody)
+	flow := newTestFlowWithHTTPData(request, response)
+
+	assembler.parseHTTP(flow)
+
+	if flow.HTTP == nil {
+		t.Fatal("parseHTTP() did not set HTTP info")
+	}
+	if flow.HTTP.ResponseBody != actualBody {
+		t.Errorf("HTTP.ResponseBody = %q, want %q", flow.HTTP.ResponseBody, actualBody)
+	}
+}
+
+func TestParseHTTP_RequestAndResponseBodiesBothExtracted(t *testing.T) {
+	assembler := newTestAssembler()
+	requestBody := `{"action":"create"}`
+	request := []byte("POST /api/items HTTP/1.1\r\nHost: example.com\r\nContent-Type: application/json\r\nContent-Length: 19\r\n\r\n" + requestBody)
+	responseBody := `{"id":42,"status":"created"}`
+	response := []byte("HTTP/1.1 201 Created\r\nContent-Type: application/json\r\nContent-Length: 28\r\n\r\n" + responseBody)
+	flow := newTestFlowWithHTTPData(request, response)
+
+	assembler.parseHTTP(flow)
+
+	if flow.HTTP == nil {
+		t.Fatal("parseHTTP() did not set HTTP info")
+	}
+	if flow.HTTP.RequestBody != requestBody {
+		t.Errorf("HTTP.RequestBody = %q, want %q", flow.HTTP.RequestBody, requestBody)
+	}
+	if flow.HTTP.ResponseBody != responseBody {
+		t.Errorf("HTTP.ResponseBody = %q, want %q", flow.HTTP.ResponseBody, responseBody)
+	}
+}
