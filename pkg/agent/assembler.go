@@ -351,7 +351,12 @@ func (a *TCPAssembler) parseTLS(flow *TCPFlow) {
 		flow.TLS.SNI = tlsInfo.SNI
 	}
 	if len(tlsInfo.CipherSuites) > 0 {
-		flow.TLS.CipherSuites = tlsInfo.CipherSuites
+		// Convert cipher suite IDs to human-readable names
+		cipherSuiteNames := make([]string, len(tlsInfo.CipherSuites))
+		for i, id := range tlsInfo.CipherSuites {
+			cipherSuiteNames[i] = CipherSuiteName(id)
+		}
+		flow.TLS.CipherSuites = cipherSuiteNames
 	}
 
 	if flow.Protocol == protocol.ProtocolTLS {
