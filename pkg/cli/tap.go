@@ -62,9 +62,23 @@ func runTap(cmd *cobra.Command, args []string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Setup signal handling for cleanup
+	// Setup signal handling with context cancellation
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(sigChan)
+
+	// Signal handler goroutine - cancels context on first signal, force exits on second
+	go func() {
+		sig := <-sigChan
+		fmt.Printf("\nReceived %v, shutting down gracefully...\n", sig)
+		fmt.Println("(Press Ctrl+C again to force exit)")
+		cancel()
+
+		// Second signal = force exit
+		<-sigChan
+		fmt.Println("\nForce exit!")
+		os.Exit(1)
+	}()
 
 	fmt.Println("Starting PodScope capture session...")
 
@@ -101,11 +115,18 @@ func runTap(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to create session: %w", err)
 	}
 
-	// Cleanup on exit
+	// Cleanup on exit with timeout
 	defer func() {
 		fmt.Println("\nCleaning up session resources...")
-		if err := session.Cleanup(context.Background()); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: cleanup failed: %v\n", err)
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cleanupCancel()
+
+		if err := session.Cleanup(cleanupCtx); err != nil {
+			if cleanupCtx.Err() == context.DeadlineExceeded {
+				fmt.Fprintf(os.Stderr, "Warning: cleanup timed out after 30 seconds\n")
+			} else {
+				fmt.Fprintf(os.Stderr, "Warning: cleanup failed: %v\n", err)
+			}
 		}
 		fmt.Println("Cleanup complete.")
 	}()
@@ -113,6 +134,9 @@ func runTap(cmd *cobra.Command, args []string) error {
 	// Start the session (creates namespace, deploys hub)
 	fmt.Println("Creating session namespace and deploying Hub...")
 	if err := session.Start(ctx); err != nil {
+		if ctx.Err() == context.Canceled {
+			return nil // User requested shutdown
+		}
 		return fmt.Errorf("failed to start session: %w", err)
 	}
 
@@ -146,6 +170,10 @@ func runTap(cmd *cobra.Command, args []string) error {
 	// Inject capture agents into target pods
 	fmt.Println("\nInjecting capture agents...")
 	for _, pod := range targetPods {
+		// Check if shutdown was requested
+		if ctx.Err() != nil {
+			return nil
+		}
 		if err := session.InjectAgent(ctx, pod, forcePrivileged, targetContainer); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: failed to inject agent into %s/%s: %v\n",
 				pod.Namespace, pod.Name, err)
@@ -158,6 +186,9 @@ func runTap(cmd *cobra.Command, args []string) error {
 	fmt.Printf("\nStarting port-forward to Hub UI on localhost:%d...\n", uiPort)
 	activePort, err := session.StartPortForward(ctx, uiPort)
 	if err != nil {
+		if ctx.Err() == context.Canceled {
+			return nil // User requested shutdown
+		}
 		return fmt.Errorf("failed to start port-forward: %w", err)
 	}
 
@@ -167,12 +198,8 @@ func runTap(cmd *cobra.Command, args []string) error {
 	fmt.Printf("Press Ctrl+C to stop and cleanup\n")
 	fmt.Printf("========================================\n\n")
 
-	// Wait for interrupt
-	select {
-	case <-sigChan:
-		fmt.Println("\nReceived interrupt signal...")
-	case <-ctx.Done():
-	}
+	// Wait for context cancellation (triggered by signal handler)
+	<-ctx.Done()
 
 	return nil
 }
