@@ -122,6 +122,10 @@ export function FlowDetail({ flow, onClose, onDownloadPCAP, onOpenTerminal }: Fl
               value={flow.ttfbMs ? `${flow.ttfbMs.toFixed(1)}ms` : 'N/A'}
               indicator={getTTFBIndicator(flow.ttfbMs)}
             />
+            <MetricItem
+              label="Throughput"
+              value={calculateThroughput(flow.bytesSent, flow.bytesReceived, flow.duration)}
+            />
           </div>
         </CollapsibleSection>
 
@@ -358,6 +362,14 @@ function getTTFBIndicator(ttfbMs: number | undefined): 'success' | 'warning' | '
   if (ttfbMs < 200) return 'success'
   if (ttfbMs <= 600) return 'warning'
   return 'error'
+}
+
+function calculateThroughput(bytesSent: number, bytesReceived: number, durationMs: number): string {
+  if (!durationMs || durationMs === 0) return 'N/A'
+  const totalBytes = bytesSent + bytesReceived
+  const durationSeconds = durationMs / 1000
+  const bytesPerSecond = totalBytes / durationSeconds
+  return formatBytes(bytesPerSecond) + '/s'
 }
 
 function MetricItem({ label, value, indicator }: { label: string; value: string; indicator?: 'success' | 'warning' | 'error' | null }) {
