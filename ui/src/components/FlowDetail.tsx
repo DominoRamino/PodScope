@@ -421,7 +421,7 @@ function ProtocolVersionBadge({ version }: { version: 'HTTP/2' | 'HTTP/1.1' | 'U
 }
 
 function TimingBar({ flow }: { flow: Flow }) {
-  const segments: { label: string; value: number; color: string }[] = []
+  const segments: { label: string; value: number; color: string; ttfbValue?: number }[] = []
   let total = 0
 
   if (flow.tcpHandshakeMs) {
@@ -437,7 +437,7 @@ function TimingBar({ flow }: { flow: Flow }) {
   if (flow.ttfbMs) {
     const processing = flow.ttfbMs - total
     if (processing > 0) {
-      segments.push({ label: 'TTFB', value: processing, color: 'bg-status-success' })
+      segments.push({ label: 'TTFB', value: processing, color: 'bg-status-success', ttfbValue: flow.ttfbMs })
       total = flow.ttfbMs
     }
   }
@@ -455,7 +455,7 @@ function TimingBar({ flow }: { flow: Flow }) {
             key={i}
             className={`${seg.color} h-full transition-all duration-500`}
             style={{ width: `${(seg.value / total) * 100}%` }}
-            title={`${seg.label}: ${seg.value.toFixed(1)}ms`}
+            title={seg.ttfbValue ? `${seg.label}: ${seg.ttfbValue.toFixed(1)}ms` : `${seg.label}: ${seg.value.toFixed(1)}ms`}
           />
         ))}
       </div>
@@ -466,7 +466,7 @@ function TimingBar({ flow }: { flow: Flow }) {
           <div key={i} className="flex items-center gap-2">
             <div className={`w-2.5 h-2.5 rounded-full ${seg.color}`} />
             <span className="text-[11px] text-gray-400">
-              {seg.label}: <span className="text-white font-mono">{seg.value.toFixed(1)}ms</span>
+              {seg.label}: <span className="text-white font-mono">{seg.ttfbValue ? seg.ttfbValue.toFixed(1) : seg.value.toFixed(1)}ms</span>
             </span>
           </div>
         ))}
