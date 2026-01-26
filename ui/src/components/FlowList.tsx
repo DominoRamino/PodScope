@@ -2,7 +2,7 @@ import { Flow, SortColumn, SortConfig } from '../types'
 import { ArrowRight, ArrowUp, ArrowDown, ArrowUpDown, Lock, Radar, Globe, Server } from 'lucide-react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { useRef, memo, useState, useMemo } from 'react'
-import { formatBytes, formatTime } from '../utils'
+import { formatBytes, formatDuration, formatTime } from '../utils'
 
 interface FlowListProps {
   flows: Flow[]
@@ -23,7 +23,7 @@ export function FlowList({ flows, selectedId, onSelect }: FlowListProps) {
       if (prev.column === column) {
         return { column, direction: prev.direction === 'asc' ? 'desc' : 'asc' }
       }
-      const defaultDesc: SortColumn[] = ['timestamp', 'latency', 'size', 'status']
+      const defaultDesc: SortColumn[] = ['timestamp', 'latency', 'duration', 'size', 'status']
       return { column, direction: defaultDesc.includes(column) ? 'desc' : 'asc' }
     })
   }
@@ -80,6 +80,15 @@ export function FlowList({ flows, selectedId, onSelect }: FlowListProps) {
           cmp = la - lb
           break
         }
+        case 'duration': {
+          const da = a.duration || -1
+          const db = b.duration || -1
+          if (da === -1 && db === -1) { cmp = 0; break }
+          if (da === -1) return 1
+          if (db === -1) return -1
+          cmp = da - db
+          break
+        }
         case 'size':
           cmp = (a.bytesSent + a.bytesReceived) - (b.bytesSent + b.bytesReceived)
           break
@@ -104,7 +113,7 @@ export function FlowList({ flows, selectedId, onSelect }: FlowListProps) {
         <div className="col-span-2">
           <SortableHeader label="Timestamp" column="timestamp" currentSort={sortConfig} onSort={handleSort} />
         </div>
-        <div className="col-span-3">
+        <div className="col-span-2">
           <SortableHeader label="Source" column="source" currentSort={sortConfig} onSort={handleSort} />
         </div>
         <div className="col-span-3">
@@ -118,6 +127,9 @@ export function FlowList({ flows, selectedId, onSelect }: FlowListProps) {
         </div>
         <div className="col-span-1 flex justify-end">
           <SortableHeader label="Latency" column="latency" currentSort={sortConfig} onSort={handleSort} />
+        </div>
+        <div className="col-span-1 flex justify-end">
+          <SortableHeader label="Duration" column="duration" currentSort={sortConfig} onSort={handleSort} />
         </div>
         <div className="col-span-1 flex justify-end">
           <SortableHeader label="Size" column="size" currentSort={sortConfig} onSort={handleSort} />
@@ -270,7 +282,7 @@ const FlowRowMemo = memo(function FlowRow({ flow, selected, onClick, index }: Fl
       </div>
 
       {/* Source */}
-      <div className="col-span-3 min-w-0">
+      <div className="col-span-2 min-w-0">
         <div className="flex items-center gap-2">
           <div className="w-5 h-5 rounded-md bg-void-700/80 flex items-center justify-center flex-shrink-0">
             <Server className="w-3 h-3 text-gray-500" />
@@ -325,6 +337,11 @@ const FlowRowMemo = memo(function FlowRow({ flow, selected, onClick, index }: Fl
         {getLatency()}
       </div>
 
+      {/* Duration */}
+      <div className="col-span-1 text-right font-mono text-xs text-gray-400">
+        {formatDuration(flow.duration)}
+      </div>
+
       {/* Size */}
       <div className="col-span-1 text-right font-mono text-xs text-gray-400">
         {formatBytes(totalBytes)}
@@ -336,6 +353,7 @@ const FlowRowMemo = memo(function FlowRow({ flow, selected, onClick, index }: Fl
          prev.flow.status === next.flow.status &&
          prev.flow.bytesSent === next.flow.bytesSent &&
          prev.flow.bytesReceived === next.flow.bytesReceived &&
+         prev.flow.duration === next.flow.duration &&
          prev.selected === next.selected
 })
 

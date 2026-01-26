@@ -60,7 +60,7 @@ export interface Flow {
   agentTrafficType?: 'health' | 'flow' | 'pcap' | 'registration' | 'unknown'
 }
 
-export type SortColumn = 'timestamp' | 'source' | 'destination' | 'protocol' | 'status' | 'latency' | 'size'
+export type SortColumn = 'timestamp' | 'source' | 'destination' | 'protocol' | 'status' | 'latency' | 'duration' | 'size'
 export type SortDirection = 'asc' | 'desc'
 export interface SortConfig {
   column: SortColumn
