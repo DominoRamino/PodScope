@@ -143,7 +143,7 @@ export function FlowDetail({ flow, onClose, onDownloadPCAP, onOpenTerminal }: Fl
                 <CipherSuitesList cipherSuites={flow.tls.cipherSuites} />
               )}
               {flow.tls.alpn && flow.tls.alpn.length > 0 && (
-                <InfoItem label="ALPN" value={flow.tls.alpn.join(', ')} />
+                <ALPNProtocolsList protocols={flow.tls.alpn} />
               )}
               <div className="flex items-center gap-3 p-3 rounded-lg bg-amber-500/5 border border-amber-500/20">
                 <Lock className="w-4 h-4 text-amber-400" />
@@ -442,6 +442,28 @@ function CipherSuitesList({ cipherSuites }: { cipherSuites: string[] }) {
             </span>
           ))}
         </div>
+      </div>
+    </div>
+  )
+}
+
+function ALPNProtocolsList({ protocols }: { protocols: string[] }) {
+  if (!protocols || protocols.length === 0) {
+    return null
+  }
+
+  return (
+    <div>
+      <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-2">ALPN Protocols</div>
+      <div className="flex flex-wrap gap-1.5">
+        {protocols.map((protocol, index) => (
+          <span
+            key={index}
+            className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-mono bg-glow-400/10 text-glow-400 border border-glow-400/30"
+          >
+            {protocol}
+          </span>
+        ))}
       </div>
     </div>
   )
