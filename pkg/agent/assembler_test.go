@@ -495,8 +495,8 @@ var tlsClientHelloWithSNI = []byte{
 	// EC Point Formats Extension
 	0x00, 0x0b, // Extension type: ec_point_formats (11)
 	0x00, 0x02, // Extension length: 2 bytes
-	0x01,       // EC point formats length: 1
-	0x00,       // uncompressed
+	0x01, // EC point formats length: 1
+	0x00, // uncompressed
 
 	// Supported Groups Extension
 	0x00, 0x0a, // Extension type: supported_groups (10)
@@ -1925,13 +1925,13 @@ func buildClientHelloWithExtensionOrder(cipherSuites []uint16, alpnProtocols []s
 	recordLen := 4 + bodyLen // handshake header + body
 
 	// TLS Record Header (5 bytes)
-	clientHello = append(clientHello, 0x16)                                           // Content type: Handshake
-	clientHello = append(clientHello, 0x03, 0x01)                                     // Version: TLS 1.0 (record layer)
-	clientHello = append(clientHello, byte(recordLen>>8), byte(recordLen&0xff))       // Record length
+	clientHello = append(clientHello, 0x16)                                     // Content type: Handshake
+	clientHello = append(clientHello, 0x03, 0x01)                               // Version: TLS 1.0 (record layer)
+	clientHello = append(clientHello, byte(recordLen>>8), byte(recordLen&0xff)) // Record length
 
 	// Handshake Header (4 bytes)
-	clientHello = append(clientHello, 0x01)                                           // Handshake type: ClientHello
-	clientHello = append(clientHello, 0x00, byte(bodyLen>>8), byte(bodyLen&0xff))     // Handshake length
+	clientHello = append(clientHello, 0x01)                                       // Handshake type: ClientHello
+	clientHello = append(clientHello, 0x00, byte(bodyLen>>8), byte(bodyLen&0xff)) // Handshake length
 
 	// Version (2 bytes)
 	clientHello = append(clientHello, 0x03, 0x03) // TLS 1.2
@@ -2004,8 +2004,8 @@ func buildMalformedALPNClientHello(malformType string) []byte {
 			0x00, 0x10, // Extension type: ALPN
 			0x00, 0x04, // Extension length: 4
 			0x00, 0x02, // ALPN list length: 2
-			0x00,       // Zero-length protocol (invalid)
-			0x00,       // Padding
+			0x00, // Zero-length protocol (invalid)
+			0x00, // Padding
 		}
 	default:
 		alpnExt = []byte{}
@@ -2015,8 +2015,8 @@ func buildMalformedALPNClientHello(malformType string) []byte {
 	clientHello = append(clientHello, alpnExt...)
 
 	return clientHello
-// Test HTTP body extraction - US-002, US-003, US-004, US-005
-
+	// Test HTTP body extraction - US-002, US-003, US-004, US-005
+}
 func TestParseHTTP_ExtractsRequestBody_POST(t *testing.T) {
 	assembler := newTestAssembler()
 	bodyContent := `{"name":"John","email":"john@example.com"}`
