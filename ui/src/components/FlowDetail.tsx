@@ -116,7 +116,7 @@ export function FlowDetail({ flow, onClose, onDownloadPCAP, onOpenTerminal }: Fl
 
         {/* Advanced Metrics */}
         <CollapsibleSection title="Advanced Metrics" icon={<Activity className="w-4 h-4" />}>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-3 gap-4">
             <MetricItem
               label="Time to First Byte"
               value={flow.ttfbMs ? `${flow.ttfbMs.toFixed(1)}ms` : 'N/A'}
@@ -126,6 +126,7 @@ export function FlowDetail({ flow, onClose, onDownloadPCAP, onOpenTerminal }: Fl
               label="Throughput"
               value={calculateThroughput(flow.bytesSent, flow.bytesReceived, flow.duration)}
             />
+            <ProtocolVersionBadge version={getProtocolVersionFromALPN(flow.tls?.alpn)} />
           </div>
         </CollapsibleSection>
 
@@ -372,6 +373,13 @@ function calculateThroughput(bytesSent: number, bytesReceived: number, durationM
   return formatBytes(bytesPerSecond) + '/s'
 }
 
+function getProtocolVersionFromALPN(alpn: string[] | undefined): 'HTTP/2' | 'HTTP/1.1' | 'Unknown' {
+  if (!alpn || alpn.length === 0) return 'Unknown'
+  if (alpn.includes('h2')) return 'HTTP/2'
+  if (alpn.includes('http/1.1')) return 'HTTP/1.1'
+  return 'Unknown'
+}
+
 function MetricItem({ label, value, indicator }: { label: string; value: string; indicator?: 'success' | 'warning' | 'error' | null }) {
   const getIndicatorClass = () => {
     switch (indicator) {
@@ -386,6 +394,28 @@ function MetricItem({ label, value, indicator }: { label: string; value: string;
     <div className="glass-card p-3">
       <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">{label}</div>
       <div className={`text-sm font-semibold font-mono ${getIndicatorClass()}`}>{value}</div>
+    </div>
+  )
+}
+
+function ProtocolVersionBadge({ version }: { version: 'HTTP/2' | 'HTTP/1.1' | 'Unknown' }) {
+  const getBadgeStyle = () => {
+    switch (version) {
+      case 'HTTP/2':
+        return 'text-status-success bg-status-success/10 border-status-success/30'
+      case 'HTTP/1.1':
+        return 'text-status-info bg-status-info/10 border-status-info/30'
+      default:
+        return 'text-gray-400 bg-gray-500/10 border-gray-500/30'
+    }
+  }
+
+  return (
+    <div className="glass-card p-3">
+      <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Protocol Version</div>
+      <span className={`inline-flex items-center px-2 py-0.5 rounded-md font-mono text-xs border ${getBadgeStyle()}`}>
+        {version}
+      </span>
     </div>
   )
 }
