@@ -19,6 +19,7 @@ export interface TLSInfo {
   version: string
   sni: string
   cipherSuite: string
+  cipherSuites?: string[]
   alpn?: string[]
   encrypted: boolean
 }

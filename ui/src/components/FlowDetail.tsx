@@ -138,7 +138,10 @@ export function FlowDetail({ flow, onClose, onDownloadPCAP, onOpenTerminal }: Fl
                 <InfoItem label="Version" value={flow.tls.version} />
                 {flow.tls.sni && <InfoItem label="SNI" value={flow.tls.sni} />}
               </div>
-              {flow.tls.cipherSuite && <InfoItem label="Cipher Suite" value={flow.tls.cipherSuite} />}
+              {flow.tls.cipherSuite && <InfoItem label="Negotiated Cipher" value={flow.tls.cipherSuite} />}
+              {flow.tls.cipherSuites && flow.tls.cipherSuites.length > 0 && (
+                <CipherSuitesList cipherSuites={flow.tls.cipherSuites} />
+              )}
               {flow.tls.alpn && flow.tls.alpn.length > 0 && (
                 <InfoItem label="ALPN" value={flow.tls.alpn.join(', ')} />
               )}
@@ -416,6 +419,30 @@ function ProtocolVersionBadge({ version }: { version: 'HTTP/2' | 'HTTP/1.1' | 'U
       <span className={`inline-flex items-center px-2 py-0.5 rounded-md font-mono text-xs border ${getBadgeStyle()}`}>
         {version}
       </span>
+    </div>
+  )
+}
+
+function CipherSuitesList({ cipherSuites }: { cipherSuites: string[] }) {
+  if (!cipherSuites || cipherSuites.length === 0) {
+    return null
+  }
+
+  return (
+    <div>
+      <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-2">Offered Cipher Suites</div>
+      <div className="max-h-[120px] overflow-y-auto rounded-lg bg-void-900 border border-void-700 p-3">
+        <div className="flex flex-wrap gap-1.5">
+          {cipherSuites.map((suite, index) => (
+            <span
+              key={index}
+              className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-mono bg-void-700/50 text-gray-300 border border-void-600/50"
+            >
+              {suite}
+            </span>
+          ))}
+        </div>
+      </div>
     </div>
   )
 }
