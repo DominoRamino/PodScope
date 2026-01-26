@@ -168,9 +168,7 @@ export function FlowDetail({ flow, onClose, onDownloadPCAP, onOpenTerminal }: Fl
                 {flow.http.requestHeaders && Object.keys(flow.http.requestHeaders).length > 0 && (
                   <HeadersTable headers={flow.http.requestHeaders} title="Headers" />
                 )}
-                {flow.http.requestBody && (
-                  <CodeBlock title="Request Body" content={flow.http.requestBody} />
-                )}
+                <BodyPreview title="Request Body" content={flow.http.requestBody} />
               </div>
             </Section>
 
@@ -339,6 +337,21 @@ function CodeBlock({ title, content }: { title: string; content: string }) {
     <div>
       <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-2">{title}</div>
       <pre className="glass-card p-3 text-xs font-mono text-gray-300 overflow-x-auto max-h-48 whitespace-pre-wrap break-all">
+        {content}
+      </pre>
+    </div>
+  )
+}
+
+function BodyPreview({ title, content }: { title: string; content: string | undefined }) {
+  if (!content) {
+    return null
+  }
+
+  return (
+    <div>
+      <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-2">{title}</div>
+      <pre className="font-mono text-sm text-gray-300 bg-void-900 border border-void-700 p-3 rounded-lg max-h-[200px] overflow-y-auto whitespace-pre-wrap break-all">
         {content}
       </pre>
     </div>
