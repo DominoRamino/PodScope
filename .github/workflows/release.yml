@@ -41,7 +41,9 @@ jobs:
         run: |
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
             -ldflags "-X github.com/podscope/podscope/pkg/cli.Version=${{ steps.version.outputs.version }} \
-                      -X github.com/podscope/podscope/pkg/k8s.DefaultImageTag=${{ steps.version.outputs.git_commit }}" \
+                      -X github.com/podscope/podscope/pkg/k8s.DefaultImageTag=${{ steps.version.outputs.git_commit }} \
+                      -X github.com/podscope/podscope/pkg/k8s.DefaultHubImage=dominoramino/podscope:${{ steps.version.outputs.version }} \
+                      -X github.com/podscope/podscope/pkg/k8s.DefaultAgentImage=dominoramino/podscope-agent:${{ steps.version.outputs.version }}" \
             -o podscope-linux-amd64 \
             ./cmd/podscope
 

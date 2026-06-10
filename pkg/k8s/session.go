@@ -25,13 +25,25 @@ import (
 	"k8s.io/kubectl/pkg/scheme"
 )
 
-// DefaultImageTag can be overridden at build time via -ldflags
+// DefaultImageTag can be overridden at build time via -ldflags.
+// Local development defaults to unqualified, git-commit-tagged images so
+// minikube can load and run images from the local Docker cache. Release builds
+// can set DefaultHubImage and DefaultAgentImage to registry-qualified images.
 var DefaultImageTag = "v1"
+
+// DefaultAgentImage can be overridden at build time for release/install builds.
+var DefaultAgentImage = ""
+
+// DefaultHubImage can be overridden at build time for release/install builds.
+var DefaultHubImage = ""
 
 // GetAgentImage returns the agent image to use, checking env var first
 func GetAgentImage() string {
 	if img := os.Getenv("PODSCOPE_AGENT_IMAGE"); img != "" {
 		return img
+	}
+	if DefaultAgentImage != "" {
+		return DefaultAgentImage
 	}
 	return fmt.Sprintf("podscope-agent:%s", DefaultImageTag)
 }
@@ -40,6 +52,9 @@ func GetAgentImage() string {
 func GetHubImage() string {
 	if img := os.Getenv("PODSCOPE_HUB_IMAGE"); img != "" {
 		return img
+	}
+	if DefaultHubImage != "" {
+		return DefaultHubImage
 	}
 	return fmt.Sprintf("podscope:%s", DefaultImageTag)
 }

@@ -1,6 +1,6 @@
 # PodScope
 
-A lightweight, ephemeral network traffic capture and analysis tool for Kubernetes. PodScope attaches to pods using ephemeral containers to capture and analyze network traffic without modifying your deployments.
+A lightweight, ephemeral network traffic capture and analysis tool for Kubernetes. PodScope attaches to pods using ephemeral containers to capture and analyze network traffic without modifying your deployments. It is designed to be Kubernetes-distribution agnostic; minikube is useful for local testing, but the runtime path should work on any cluster that supports ephemeral containers and the required capabilities.
 
 
 https://github.com/user-attachments/assets/d88ba17b-ae1d-4d20-9349-0989ac500ce8
@@ -15,7 +15,7 @@ https://github.com/user-attachments/assets/d88ba17b-ae1d-4d20-9349-0989ac500ce8
 
 4. **Protocol Analysis**: TCP streams are reassembled, and HTTP/TLS protocols are parsed to extract metadata.
 
-5. **Data Streaming**: Flow events and raw PCAP data are streamed to the Hub via gRPC.
+5. **Data Streaming**: Flow events and raw PCAP chunks are sent to the Hub over HTTP POST endpoints. The UI receives live updates over WebSocket.
 
 6. **Visualization**: The Hub serves a React UI that connects via WebSocket for real-time updates.
 
@@ -36,7 +36,7 @@ https://github.com/user-attachments/assets/d88ba17b-ae1d-4d20-9349-0989ac500ce8
 
 - Kubernetes 1.25+ (ephemeral containers support)
 - `NET_RAW` capability permitted in your cluster
-- Go 1.22+ (for building)
+- Go 1.24+ (for building)
 - Node.js 20+ (for UI development)
 
 ### Installation
@@ -69,6 +69,16 @@ podscope tap -A -l app=api
 
 # Force privileged mode (if NET_RAW is blocked)
 podscope tap -n default -l app=frontend --force-privileged
+```
+
+### Image Selection
+
+Local minikube development uses unqualified, git-commit-tagged images such as `podscope:<commit>` and `podscope-agent:<commit>` so `make load` can place them directly into minikube. Release builds embed registry-qualified defaults. Any environment can override images explicitly:
+
+```bash
+PODSCOPE_HUB_IMAGE=your-registry/podscope:tag \
+PODSCOPE_AGENT_IMAGE=your-registry/podscope-agent:tag \
+podscope tap -n default -l app=frontend
 ```
 
 ### AI Features
@@ -221,14 +231,14 @@ npm run test:coverage
 │                    Session Namespace                         │
 │  ┌─────────────────────────────────────────────────────┐    │
 │  │                    Hub (Deployment)                  │    │
-│  │  - Receives flows from Agents (gRPC)                │    │
+│  │  - Receives flows/PCAP from Agents (HTTP POST)      │    │
 │  │  - Stores PCAP data                                 │    │
 │  │  - Serves WebSocket API for UI                      │    │
 │  │  - Serves React UI                                  │    │
 │  └─────────────────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────────────────┘
                               ▲
-                              │ gRPC
+                              │ HTTP POST
 ┌─────────────────────────────┼───────────────────────────────┐
 │            Target Pod       │                               │
 │  ┌────────────────────┐    │    ┌─────────────────────┐    │
