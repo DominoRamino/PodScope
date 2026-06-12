@@ -18,15 +18,15 @@ import (
 const staleSessionMaxAge = 1 * time.Hour
 
 var (
-	namespace        string
-	labelSelector    string
-	podName          string
-	allNamespaces    bool
-	forcePrivileged  bool
-	hubPort          int
-	uiPort           int
-	targetContainer  string
-	anthropicAPIKey  string
+	namespace       string
+	labelSelector   string
+	podName         string
+	allNamespaces   bool
+	forcePrivileged bool
+	hubPort         int
+	uiPort          int
+	targetContainer string
+	anthropicAPIKey string
 )
 
 var tapCmd = &cobra.Command{
@@ -52,7 +52,7 @@ func init() {
 	tapCmd.Flags().StringVar(&podName, "pod", "", "Specific pod name to target")
 	tapCmd.Flags().BoolVarP(&allNamespaces, "all-namespaces", "A", false, "Target all namespaces")
 	tapCmd.Flags().BoolVar(&forcePrivileged, "force-privileged", false, "Force privileged mode for the capture agent")
-	tapCmd.Flags().IntVar(&hubPort, "hub-port", 8080, "Port for the Hub gRPC server")
+	tapCmd.Flags().IntVar(&hubPort, "hub-port", 8080, "Hub HTTP/API port inside the cluster (reserved; UI port-forward uses 8080 today)")
 	tapCmd.Flags().IntVar(&uiPort, "ui-port", 8899, "Local port for the UI (via port-forward)")
 	tapCmd.Flags().StringVarP(&targetContainer, "target", "t", "", "Container to share process namespace with (defaults to first container)")
 	tapCmd.Flags().StringVar(&anthropicAPIKey, "anthropic-api-key", "", "Anthropic API key for AI features (can also use ANTHROPIC_API_KEY env var)")

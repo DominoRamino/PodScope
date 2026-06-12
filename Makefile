@@ -1,10 +1,13 @@
-.PHONY: all build build-agent build-hub build-cli build-cli-linux load clean help version inspect use-tag setup-cluster dev dev-quick dev-ui load-agent load-hub restart-test-pods test test-ui
+.PHONY: all build build-agent build-hub build-cli build-cli-linux load clean help version inspect use-tag setup-cluster dev dev-quick dev-ui load-agent load-hub restart-test-pods test test-ui verify-dev-loop
 
 # Default target
 all: build-cli build load
 
-# Enable BuildKit for faster builds with better caching
-export DOCKER_BUILDKIT=1
+# Docker BuildKit is faster, but Ubuntu's docker.io package may not include
+# the buildx plugin that BuildKit requires. Default to the legacy builder so
+# `make dev` works in lightweight sandboxes; opt in with DOCKER_BUILDKIT=1.
+DOCKER_BUILDKIT ?= 0
+export DOCKER_BUILDKIT
 
 # Version and build info
 VERSION := $(shell cat VERSION 2>/dev/null || echo "dev")
@@ -33,6 +36,7 @@ help:
 	@echo "Testing:"
 	@echo "  make test             - Run Go backend tests"
 	@echo "  make test-ui          - Run UI tests (single run)"
+	@echo "  make verify-dev-loop  - Run fast static dev-loop checks"
 	@echo ""
 	@echo "Stress Testing (run in podinfo pod for capture):"
 	@echo "  make stress-test                - Run stress test (100 requests, 10 concurrent)"
@@ -40,7 +44,7 @@ help:
 	@echo "  make stress-test-no-keepalive   - Disable connection reuse (1 flow per request)"
 	@echo "  make stress-test-list           - List all test endpoints"
 	@echo ""
-	@echo "Version Management:
+	@echo "Version Management:"
 	@echo "  make version     - Show current version info"
 	@echo "  make inspect     - Inspect image labels"
 
@@ -146,7 +150,7 @@ dev:
 	@$(MAKE) setup-cluster build-cli-linux build load restart-test-pods
 	@echo ""
 	@echo "Starting PodScope session..."
-	@./podscope-linux tap -n default -l app.kubernetes.io/name=podinfo --ui-port 8899
+	@./podscope-linux tap -n default -l app=podinfo --ui-port 8899
 
 # Smart rebuild: only rebuild changed components
 dev-quick: setup-cluster build-cli-linux
@@ -166,7 +170,7 @@ dev-quick: setup-cluster build-cli-linux
 	@$(MAKE) restart-test-pods
 	@echo ""
 	@echo "Starting PodScope session..."
-	@./podscope-linux tap -n default -l app.kubernetes.io/name=podinfo --ui-port 8899
+	@./podscope-linux tap -n default -l app=podinfo --ui-port 8899
 
 # UI-only development (Vite hot-reload)
 dev-ui:
@@ -186,6 +190,10 @@ test-ui:
 	@echo "Running UI tests..."
 	@cd ui && npm test -- --run
 
+# Run fast static checks for dev-loop assumptions
+verify-dev-loop:
+	@python3 scripts/verify-dev-loop.py
+
 # Individual image loading (via )
 load-agent:
 	@minikube image load podscope-agent:$(IMAGE_TAG)
@@ -197,7 +205,7 @@ load-hub:
 restart-test-pods:
 	@echo "Restarting podinfo pods to clear ephemeral containers..."
 	@kubectl rollout restart deploy podinfo -n default 
-	@kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=podinfo -n default --timeout=60s
+	@kubectl wait --for=condition=ready pod -l app=podinfo -n default --timeout=60s
 	@echo "✓ Test pods restarted"
 
 # =============================================================================
@@ -216,7 +224,7 @@ REQUESTS ?= 100
 CONCURRENCY ?= 10
 stress-test: build-stress-test
 	@echo "Running stress test inside podinfo pod..."
-	@POD=$$(kubectl get pod -l app.kubernetes.io/name=podinfo -n default -o jsonpath='{.items[0].metadata.name}'); \
+	@POD=$$(kubectl get pod -l app=podinfo -n default -o jsonpath='{.items[0].metadata.name}'); \
 	echo "Target pod: $$POD"; \
 	kubectl cp scripts/stress-test default/$$POD:/tmp/stress-test; \
 	kubectl exec -n default $$POD -- chmod +x /tmp/stress-test; \
@@ -224,14 +232,14 @@ stress-test: build-stress-test
 
 # Run stress test with verbose output (shows each request)
 stress-test-verbose: build-stress-test
-	@POD=$$(kubectl get pod -l app.kubernetes.io/name=podinfo -n default -o jsonpath='{.items[0].metadata.name}'); \
+	@POD=$$(kubectl get pod -l app=podinfo -n default -o jsonpath='{.items[0].metadata.name}'); \
 	kubectl cp scripts/stress-test default/$$POD:/tmp/stress-test; \
 	kubectl exec -n default $$POD -- chmod +x /tmp/stress-test; \
 	kubectl exec -n default $$POD -- /tmp/stress-test -n $(REQUESTS) -c $(CONCURRENCY) -v
 
 # Run stress test with no keep-alive (creates 1 TCP flow per request)
 stress-test-no-keepalive: build-stress-test
-	@POD=$$(kubectl get pod -l app.kubernetes.io/name=podinfo -n default -o jsonpath='{.items[0].metadata.name}'); \
+	@POD=$$(kubectl get pod -l app=podinfo -n default -o jsonpath='{.items[0].metadata.name}'); \
 	kubectl cp scripts/stress-test default/$$POD:/tmp/stress-test; \
 	kubectl exec -n default $$POD -- chmod +x /tmp/stress-test; \
 	kubectl exec -n default $$POD -- /tmp/stress-test -n $(REQUESTS) -c $(CONCURRENCY) -no-keepalive

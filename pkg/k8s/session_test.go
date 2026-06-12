@@ -1642,6 +1642,94 @@ func TestInjectAgent_OkIfTerminatedAgentExists(t *testing.T) {
 }
 
 // TestInjectAgent_UsesCorrectAgentImage tests that the container uses the correct agent image
+func restoreImageDefaults(t *testing.T) {
+	t.Helper()
+	origTag := DefaultImageTag
+	origAgentImage := DefaultAgentImage
+	origHubImage := DefaultHubImage
+	t.Cleanup(func() {
+		DefaultImageTag = origTag
+		DefaultAgentImage = origAgentImage
+		DefaultHubImage = origHubImage
+	})
+}
+
+func TestGetAgentImage_DefaultsToLocalCommitTaggedImage(t *testing.T) {
+	restoreImageDefaults(t)
+	t.Setenv("PODSCOPE_AGENT_IMAGE", "")
+	DefaultImageTag = "abc1234"
+	DefaultAgentImage = ""
+
+	got := GetAgentImage()
+	want := "podscope-agent:abc1234"
+	if got != want {
+		t.Fatalf("GetAgentImage() = %q, want %q", got, want)
+	}
+}
+
+func TestGetHubImage_DefaultsToLocalCommitTaggedImage(t *testing.T) {
+	restoreImageDefaults(t)
+	t.Setenv("PODSCOPE_HUB_IMAGE", "")
+	DefaultImageTag = "abc1234"
+	DefaultHubImage = ""
+
+	got := GetHubImage()
+	want := "podscope:abc1234"
+	if got != want {
+		t.Fatalf("GetHubImage() = %q, want %q", got, want)
+	}
+}
+
+func TestGetAgentImage_UsesReleaseDefaultImage(t *testing.T) {
+	restoreImageDefaults(t)
+	t.Setenv("PODSCOPE_AGENT_IMAGE", "")
+	DefaultImageTag = "abc1234"
+	DefaultAgentImage = "dominoramino/podscope-agent:0.1.2"
+
+	got := GetAgentImage()
+	want := "dominoramino/podscope-agent:0.1.2"
+	if got != want {
+		t.Fatalf("GetAgentImage() = %q, want %q", got, want)
+	}
+}
+
+func TestGetHubImage_UsesReleaseDefaultImage(t *testing.T) {
+	restoreImageDefaults(t)
+	t.Setenv("PODSCOPE_HUB_IMAGE", "")
+	DefaultImageTag = "abc1234"
+	DefaultHubImage = "dominoramino/podscope:0.1.2"
+
+	got := GetHubImage()
+	want := "dominoramino/podscope:0.1.2"
+	if got != want {
+		t.Fatalf("GetHubImage() = %q, want %q", got, want)
+	}
+}
+
+func TestGetAgentImage_EnvOverrideWins(t *testing.T) {
+	restoreImageDefaults(t)
+	t.Setenv("PODSCOPE_AGENT_IMAGE", "registry.example.com/custom-agent:dev")
+	DefaultAgentImage = "dominoramino/podscope-agent:0.1.2"
+
+	got := GetAgentImage()
+	want := "registry.example.com/custom-agent:dev"
+	if got != want {
+		t.Fatalf("GetAgentImage() = %q, want %q", got, want)
+	}
+}
+
+func TestGetHubImage_EnvOverrideWins(t *testing.T) {
+	restoreImageDefaults(t)
+	t.Setenv("PODSCOPE_HUB_IMAGE", "registry.example.com/custom-hub:dev")
+	DefaultHubImage = "dominoramino/podscope:0.1.2"
+
+	got := GetHubImage()
+	want := "registry.example.com/custom-hub:dev"
+	if got != want {
+		t.Fatalf("GetHubImage() = %q, want %q", got, want)
+	}
+}
+
 func TestInjectAgent_UsesCorrectAgentImage(t *testing.T) {
 	sessionID := "img12345"
 	ts := createTestSession(t, sessionID)

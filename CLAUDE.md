@@ -9,12 +9,12 @@ PodScope Shark is a Kubernetes network traffic capture and analysis tool. It use
 **Key Technology Stack:**
 - **Backend**: Go 1.24+, gopacket for packet capture, Kubernetes client-go
 - **Frontend**: React 18, TypeScript, Vite, TailwindCSS
-- **Protocols**: gRPC for agent-hub communication (HTTP fallback), WebSocket for UI real-time updates
+- **Protocols**: HTTP POST for active agent-hub communication, WebSocket for UI real-time updates. gRPC/proto code exists but is not the canonical runtime path today.
 - **Container**: Docker multi-stage builds for Hub and Agent images
 
 ## Quick Start: Development Workflow
 
-**IMPORTANT**: This project uses minikube running in WSL. Use these one-command workflows for testing:
+**IMPORTANT**: PodScope should stay Kubernetes-distribution agnostic. Minikube is the local test environment; real clusters may be AKS, EKS, GKE, kind, or any Kubernetes flavor with ephemeral container support.
 
 ### One-Command Development (Recommended)
 
@@ -24,14 +24,13 @@ make dev
 ```
 
 This single command:
-1. Increments build version
-2. Ensures minikube is running with podinfo test workload
-3. Builds Linux CLI binary (for WSL compatibility)
-4. Builds Hub and Agent Docker images
-5. Loads images into minikube
-6. Restarts podinfo pods (clears old ephemeral containers)
-7. Starts PodScope capture session
-8. Opens UI (port will be shown in output)
+1. Ensures minikube is running with podinfo test workload
+2. Builds Linux CLI binary for local test execution
+3. Builds Hub and Agent Docker images
+4. Loads images into minikube
+5. Restarts podinfo pods (clears old ephemeral containers)
+6. Starts PodScope capture session
+7. Opens UI (port will be shown in output)
 
 ### Quick Iteration
 
@@ -66,9 +65,9 @@ make help                 # Show all available targets
 
 ### Environment Notes
 
-- **Minikube runs in WSL** - all kubectl/minikube commands use `wsl` prefix
-- **CLI is cross-compiled for Linux** - `podscope-linux` binary runs in WSL
-- **Test workload**: podinfo deployment with label `app.kubernetes.io/name=podinfo`
+- **Minikube is for local testing only** - do not bake minikube assumptions into runtime code.
+- **CLI is cross-compiled for Linux** - `podscope-linux` is used by the local dev loop.
+- **Test workload**: podinfo deployment with label `app=podinfo`
 
 ---
 
@@ -96,9 +95,6 @@ make dev-hub                  # Run Hub locally: go run ./cmd/hub
 ### React UI
 
 ```bash
-# Build UI for production
-make build-ui                 # cd ui && npm install && npm run build
-
 # Development mode
 make dev-ui                   # cd ui && npm run dev (Vite dev server)
 
@@ -113,17 +109,10 @@ npm run lint                  # ESLint with TypeScript
 ### Docker Images
 
 ```bash
-make docker-build             # Build both Hub and Agent images
-make docker-build-hub         # Build Hub image only
-make docker-build-agent       # Build Agent image only
-make docker-push              # Push to registry (REGISTRY env var)
-```
-
-### Installation and Release
-
-```bash
-make install                  # Copy bin/podscope to /usr/local/bin/
-make release                  # Cross-compile for all platforms (Linux, Darwin, Windows)
+make build                    # Build both Hub and Agent images
+make build-hub                # Build Hub image only
+make build-agent              # Build Agent image only
+make load                     # Load local commit-tagged images into minikube
 ```
 
 ## High-Level Architecture

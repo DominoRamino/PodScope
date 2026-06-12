@@ -39,7 +39,7 @@ The command is **`tap`**, not `capture`!
     --pod string           Specific pod name to target
 -A, --all-namespaces       Target all namespaces
     --force-privileged     Force privileged mode for the capture agent
-    --hub-port int         Port for the Hub gRPC server (default 8080)
+    --hub-port int         Hub HTTP/API port inside the cluster (reserved; UI port-forward uses 8080 today) (default 8080)
     --ui-port int          Local port for the UI (default 8899)
 ```
 
